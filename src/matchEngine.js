@@ -110,6 +110,7 @@ const createInitialState = (players, options = {}) => {
     gamesPlayed: player.gamesPlayed ?? 0,
     queueOrder: player.queueOrder ?? index,
     championsLosses: player.championsLosses ?? 0,
+    battlefieldWins: player.battlefieldWins ?? 0,
   }))
   const championsPool = sorted.slice(0, 8)
   const battlefieldPool = sorted.slice(8, 16)
@@ -150,6 +151,7 @@ const applyRoundResults = (state, results) => {
   const updatedPlayers = new Map()
   const queue = [...state.queue]
   const demotedChampions = []
+  const promotedBattlefield = []
 
   const registerPlayer = (player, updates) => {
     updatedPlayers.set(player.id, {
@@ -158,6 +160,7 @@ const applyRoundResults = (state, results) => {
       gamesPlayed: updates.gamesPlayed,
       location: updates.location,
       championsLosses: updates.championsLosses,
+      battlefieldWins: updates.battlefieldWins,
     })
   }
 
@@ -166,26 +169,54 @@ const applyRoundResults = (state, results) => {
       const nextStreak = (player.winStreak ?? 0) + 1
       const nextGames = (player.gamesPlayed ?? 0) + 1
       const championsLosses = player.championsLosses ?? 0
+      const nextBattlefieldWins =
+        courtName === 'battlefield'
+          ? (player.battlefieldWins ?? 0) + 1
+          : player.battlefieldWins ?? 0
+      const isPromoted =
+        courtName === 'battlefield' && nextBattlefieldWins >= 4
       if (nextStreak >= 2) {
         registerPlayer(player, {
           winStreak: 0,
           gamesPlayed: nextGames,
-          location: 'queue',
+          location: isPromoted ? 'champions' : 'queue',
           championsLosses,
+          battlefieldWins: isPromoted ? 0 : nextBattlefieldWins,
         })
-        queue.push({
-          ...player,
-          winStreak: 0,
-          gamesPlayed: nextGames,
-          championsLosses,
-        })
+        if (isPromoted) {
+          promotedBattlefield.push({
+            ...player,
+            winStreak: 0,
+            gamesPlayed: nextGames,
+            championsLosses,
+            battlefieldWins: 0,
+          })
+        } else {
+          queue.push({
+            ...player,
+            winStreak: 0,
+            gamesPlayed: nextGames,
+            championsLosses,
+            battlefieldWins: nextBattlefieldWins,
+          })
+        }
       } else {
         registerPlayer(player, {
-          winStreak: nextStreak,
+          winStreak: isPromoted ? 0 : nextStreak,
           gamesPlayed: nextGames,
-          location: courtName,
+          location: isPromoted ? 'champions' : courtName,
           championsLosses,
+          battlefieldWins: isPromoted ? 0 : nextBattlefieldWins,
         })
+        if (isPromoted) {
+          promotedBattlefield.push({
+            ...player,
+            winStreak: 0,
+            gamesPlayed: nextGames,
+            championsLosses,
+            battlefieldWins: 0,
+          })
+        }
       }
     })
 
@@ -203,6 +234,7 @@ const applyRoundResults = (state, results) => {
         gamesPlayed: nextGames,
         location: isDemoted ? 'battlefield' : 'queue',
         championsLosses: isDemoted ? 0 : nextChampionsLosses,
+        battlefieldWins: player.battlefieldWins ?? 0,
       })
 
       if (isDemoted) {
@@ -211,6 +243,7 @@ const applyRoundResults = (state, results) => {
           winStreak: 0,
           gamesPlayed: nextGames,
           championsLosses: 0,
+          battlefieldWins: player.battlefieldWins ?? 0,
         })
       } else {
         queue.push({
@@ -218,6 +251,7 @@ const applyRoundResults = (state, results) => {
           winStreak: 0,
           gamesPlayed: nextGames,
           championsLosses: nextChampionsLosses,
+          battlefieldWins: player.battlefieldWins ?? 0,
         })
       }
     })
@@ -231,14 +265,21 @@ const applyRoundResults = (state, results) => {
     queue,
     updatedPlayers,
     demotedChampions,
+    promotedBattlefield,
   }
 }
 
 const buildNextRound = (state, results) => {
   const applied = applyRoundResults(state, results)
   const demotedChampions = applied.demotedChampions ?? []
+  const promotedBattlefield = applied.promotedBattlefield ?? []
   const overflowDemotions = demotedChampions.slice(4)
-  const queue = prioritizeQueue([...applied.queue, ...overflowDemotions])
+  const overflowPromotions = promotedBattlefield.slice(4)
+  const queue = prioritizeQueue([
+    ...applied.queue,
+    ...overflowDemotions,
+    ...overflowPromotions,
+  ])
   const partnerHistory = state.partnerHistory ?? new Set()
 
   const eligibleChampionsWinners = results.champions.winners.filter(
@@ -248,7 +289,7 @@ const buildNextRound = (state, results) => {
     (player) => (player.winStreak ?? 0) < 2
   )
 
-  const championsPool = []
+  const championsPool = promotedBattlefield.slice(0, 4)
   const battlefieldPool = demotedChampions.slice(0, 4)
 
   eligibleChampionsWinners.forEach((player) => championsPool.push(player))

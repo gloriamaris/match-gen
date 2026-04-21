@@ -23,6 +23,7 @@ This page explains how the app creates matchups without using any technical term
 - Winners stay on the court, but only up to two wins in a row.
 - If someone wins two straight games, they rotate out to keep things moving.
 - Champions Court players who lose four times get moved to Battlefield Court.
+- Battlefield Court players who win four times get moved to Champions Court.
 
 ## How the queue stays fair
 
