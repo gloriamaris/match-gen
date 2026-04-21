@@ -109,6 +109,7 @@ const createInitialState = (players, options = {}) => {
     ...player,
     gamesPlayed: player.gamesPlayed ?? 0,
     queueOrder: player.queueOrder ?? index,
+    championsLosses: player.championsLosses ?? 0,
   }))
   const championsPool = sorted.slice(0, 8)
   const battlefieldPool = sorted.slice(8, 16)
@@ -148,6 +149,7 @@ const assignCourtsForRound = (state) => {
 const applyRoundResults = (state, results) => {
   const updatedPlayers = new Map()
   const queue = [...state.queue]
+  const demotedChampions = []
 
   const registerPlayer = (player, updates) => {
     updatedPlayers.set(player.id, {
@@ -155,6 +157,7 @@ const applyRoundResults = (state, results) => {
       winStreak: updates.winStreak,
       gamesPlayed: updates.gamesPlayed,
       location: updates.location,
+      championsLosses: updates.championsLosses,
     })
   }
 
@@ -162,30 +165,61 @@ const applyRoundResults = (state, results) => {
     winners.forEach((player) => {
       const nextStreak = (player.winStreak ?? 0) + 1
       const nextGames = (player.gamesPlayed ?? 0) + 1
+      const championsLosses = player.championsLosses ?? 0
       if (nextStreak >= 2) {
         registerPlayer(player, {
           winStreak: 0,
           gamesPlayed: nextGames,
           location: 'queue',
+          championsLosses,
         })
-        queue.push({ ...player, winStreak: 0, gamesPlayed: nextGames })
+        queue.push({
+          ...player,
+          winStreak: 0,
+          gamesPlayed: nextGames,
+          championsLosses,
+        })
       } else {
         registerPlayer(player, {
           winStreak: nextStreak,
           gamesPlayed: nextGames,
           location: courtName,
+          championsLosses,
         })
       }
     })
 
     losers.forEach((player) => {
       const nextGames = (player.gamesPlayed ?? 0) + 1
+      const nextChampionsLosses =
+        courtName === 'champions'
+          ? (player.championsLosses ?? 0) + 1
+          : player.championsLosses ?? 0
+      const isDemoted =
+        courtName === 'champions' && nextChampionsLosses >= 4
+
       registerPlayer(player, {
         winStreak: 0,
         gamesPlayed: nextGames,
-        location: 'queue',
+        location: isDemoted ? 'battlefield' : 'queue',
+        championsLosses: isDemoted ? 0 : nextChampionsLosses,
       })
-      queue.push({ ...player, winStreak: 0, gamesPlayed: nextGames })
+
+      if (isDemoted) {
+        demotedChampions.push({
+          ...player,
+          winStreak: 0,
+          gamesPlayed: nextGames,
+          championsLosses: 0,
+        })
+      } else {
+        queue.push({
+          ...player,
+          winStreak: 0,
+          gamesPlayed: nextGames,
+          championsLosses: nextChampionsLosses,
+        })
+      }
     })
   }
 
@@ -196,12 +230,15 @@ const applyRoundResults = (state, results) => {
     ...state,
     queue,
     updatedPlayers,
+    demotedChampions,
   }
 }
 
 const buildNextRound = (state, results) => {
   const applied = applyRoundResults(state, results)
-  const queue = prioritizeQueue(applied.queue)
+  const demotedChampions = applied.demotedChampions ?? []
+  const overflowDemotions = demotedChampions.slice(4)
+  const queue = prioritizeQueue([...applied.queue, ...overflowDemotions])
   const partnerHistory = state.partnerHistory ?? new Set()
 
   const eligibleChampionsWinners = results.champions.winners.filter(
@@ -212,7 +249,7 @@ const buildNextRound = (state, results) => {
   )
 
   const championsPool = []
-  const battlefieldPool = []
+  const battlefieldPool = demotedChampions.slice(0, 4)
 
   eligibleChampionsWinners.forEach((player) => championsPool.push(player))
   eligibleBattlefieldWinners.forEach((player) => {

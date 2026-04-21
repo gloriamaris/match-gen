@@ -104,6 +104,18 @@ const loadPlayers = () => {
   }
 }
 
+const loadMatchHistory = () => {
+  if (typeof window === 'undefined') return []
+  const stored = window.localStorage.getItem(STORAGE_KEYS.matchHistory)
+  if (!stored) return []
+  try {
+    const parsed = JSON.parse(stored)
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    return []
+  }
+}
+
 const escapeCsvValue = (value) => {
   const text = String(value ?? '')
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
@@ -137,7 +149,7 @@ function App() {
     champions: 'idle',
     battlefield: 'idle',
   })
-  const [matchHistory, setMatchHistory] = useState([])
+  const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
     name: '',
     rating: '',
@@ -188,6 +200,14 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(STORAGE_KEYS.players, JSON.stringify(players))
   }, [players])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.matchHistory,
+      JSON.stringify(matchHistory)
+    )
+  }, [matchHistory])
 
   useEffect(() => {
     if (!toastMessage) return
