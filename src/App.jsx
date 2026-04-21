@@ -16,10 +16,16 @@ import SignatureCanvas from 'react-signature-canvas'
 import ReactMarkdown from 'react-markdown'
 import {
   buildRoundFromPlayers,
+  enforceExclusivePlayers,
   sortPlayersBySkill,
 } from './matchEngine'
-import matchEngineDoc from '../docs/match-engine.md?raw'
-import standingsDoc from '../docs/standings.md?raw'
+import matchEnginePlainDoc from '../docs/match-engine-plain.md?raw'
+import standingsPlainDoc from '../docs/standings-plain.md?raw'
+
+const STORAGE_KEYS = {
+  players: 'matchGen.players',
+  matchHistory: 'matchGen.matchHistory',
+}
 
 const defaultCourtTeams = {
   champions: ['Player 1 / Player 2', 'Player 3 / Player 4'],
@@ -60,9 +66,11 @@ const basePlayers = playersData.map((player) => {
   }
 })
 
+const ADMIN_STANDBY_IDS = new Set(['player-1', 'player-4'])
+
 const loadPlayers = () => {
   if (typeof window === 'undefined') return basePlayers
-  const stored = window.localStorage.getItem('matchGen.players')
+  const stored = window.localStorage.getItem(STORAGE_KEYS.players)
   if (!stored) return basePlayers
   try {
     const parsed = JSON.parse(stored)
@@ -96,20 +104,21 @@ const loadPlayers = () => {
   }
 }
 
-const standings = [
-  {
-    id: 'match-1',
-    teamA: 'Player 1 / Player 2',
-    teamB: 'Player 3 / Player 4',
-    score: '11 - 8',
-  },
-  {
-    id: 'match-2',
-    teamA: 'Player 5 / Player 6',
-    teamB: 'Player 7 / Player 8',
-    score: '9 - 11',
-  },
-]
+const escapeCsvValue = (value) => {
+  const text = String(value ?? '')
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+const downloadCsv = (filename, rows) => {
+  const csv = rows.map((row) => row.map(escapeCsvValue).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
 
 function App() {
   const [players, setPlayers] = useState(loadPlayers)
@@ -119,7 +128,7 @@ function App() {
   const [modalMode, setModalMode] = useState('add')
   const [editingId, setEditingId] = useState(null)
   const [infoModalOpen, setInfoModalOpen] = useState(false)
-  const [infoTab, setInfoTab] = useState('match-engine')
+  const [infoTab, setInfoTab] = useState('match-engine-plain')
   const [courtMatchups, setCourtMatchups] = useState({
     champions: null,
     battlefield: null,
@@ -170,11 +179,14 @@ function App() {
   const signatureRef = useRef(null)
   const checkedInCount = players.filter((player) => player.checkedIn).length
   const isBattlefieldDisabled = checkedInCount < 8
-  const infoContent = infoTab === 'match-engine' ? matchEngineDoc : standingsDoc
+  const infoContent =
+    infoTab === 'match-engine-plain'
+      ? matchEnginePlainDoc
+      : standingsPlainDoc
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    window.localStorage.setItem('matchGen.players', JSON.stringify(players))
+    window.localStorage.setItem(STORAGE_KEYS.players, JSON.stringify(players))
   }, [players])
 
   useEffect(() => {
@@ -209,8 +221,8 @@ function App() {
     setMatchHistory([])
     setActiveView('courts')
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('matchGen.players')
-      window.localStorage.removeItem('matchGen.matchHistory')
+      window.localStorage.removeItem(STORAGE_KEYS.players)
+      window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
     }
     setToastMessage('Storage cleared')
     closeResetModal()
@@ -261,7 +273,7 @@ function App() {
   }
 
   const openInfoModal = () => {
-    setInfoTab('match-engine')
+    setInfoTab('match-engine-plain')
     setInfoModalOpen(true)
   }
 
@@ -374,10 +386,35 @@ function App() {
     const zeroGamePlayers = eligiblePlayers.filter(
       (player) => (player.gamesPlayed ?? 0) === minGames
     )
-    const rotationPool =
+    const initialPool =
       zeroGamePlayers.length >= 8
         ? sortPlayersBySkill(zeroGamePlayers).slice(0, 8)
         : buildRotationPool()
+    const poolWithStandby = enforceExclusivePlayers(
+      initialPool,
+      ADMIN_STANDBY_IDS
+    )
+    const selectedIds = new Set(poolWithStandby.map((player) => player.id))
+    const fallbackPool = eligiblePlayers
+      .filter((player) => !selectedIds.has(player.id))
+      .sort((a, b) => {
+        const gamesA = a.gamesPlayed ?? 0
+        const gamesB = b.gamesPlayed ?? 0
+        if (gamesA !== gamesB) return gamesA - gamesB
+        return a.name.localeCompare(b.name)
+      })
+    const rotationPool = [...poolWithStandby]
+
+    while (rotationPool.length < 8 && fallbackPool.length > 0) {
+      const nextPlayer = fallbackPool.shift()
+      if (
+        ADMIN_STANDBY_IDS.has(nextPlayer.id) &&
+        rotationPool.some((player) => ADMIN_STANDBY_IDS.has(player.id))
+      ) {
+        continue
+      }
+      rotationPool.push(nextPlayer)
+    }
 
     const sorted = sortPlayersBySkill(rotationPool)
     const championsPlayers = sorted.slice(0, 4)
@@ -541,24 +578,6 @@ function App() {
     const courtId = refreshModal.courtId
     closeRefreshModal()
     handleGenerateCourts(courtId, { force: true })
-  }
-
-  const escapeCsvValue = (value) => {
-    const text = String(value ?? '')
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-  }
-
-  const downloadCsv = (filename, rows) => {
-    const csv = rows
-      .map((row) => row.map(escapeCsvValue).join(','))
-      .join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    link.click()
-    URL.revokeObjectURL(url)
   }
 
   const exportStandingsCsv = () => {
@@ -964,6 +983,7 @@ function App() {
                 >
                   <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <tr>
+                      <th className="px-4 py-3">#</th>
                       <th className="px-4 py-3">Court</th>
                       <th className="px-4 py-3">Team A</th>
                       <th className="px-4 py-3">Team B</th>
@@ -976,25 +996,50 @@ function App() {
                       <tr>
                         <td
                           className="px-4 py-6 text-center text-sm text-slate-500"
-                          colSpan={4}
+                          colSpan={6}
                         >
                           No games recorded yet.
                         </td>
                       </tr>
                     ) : (
-                      matchHistory.map((match) => (
-                        <tr key={match.id}>
-                          <td className="px-4 py-3 font-medium text-slate-800">
-                            {match.court}
-                          </td>
-                          <td className="px-4 py-3">{match.teamA}</td>
-                          <td className="px-4 py-3">{match.teamB}</td>
-                          <td className="px-4 py-3">{match.score}</td>
-                          <td className="px-4 py-3">
-                            {match.enteredBy || '—'}
-                          </td>
-                        </tr>
-                      ))
+                      matchHistory.map((match, index) => {
+                        const [scoreA, scoreB] = match.score
+                          .split('-')
+                          .map((value) => Number.parseInt(value.trim(), 10))
+                        const hasWinner =
+                          !Number.isNaN(scoreA) &&
+                          !Number.isNaN(scoreB) &&
+                          scoreA !== scoreB
+                        const teamAClass =
+                          hasWinner && scoreA > scoreB
+                            ? 'text-emerald-600 font-semibold'
+                            : ''
+                        const teamBClass =
+                          hasWinner && scoreB > scoreA
+                            ? 'text-emerald-600 font-semibold'
+                            : ''
+
+                        return (
+                          <tr key={match.id}>
+                            <td className="px-4 py-3 text-slate-500">
+                              {index + 1}
+                            </td>
+                            <td className="px-4 py-3 font-medium text-slate-800">
+                              {match.court}
+                            </td>
+                            <td className={`px-4 py-3 ${teamAClass}`}>
+                              {match.teamA}
+                            </td>
+                            <td className={`px-4 py-3 ${teamBClass}`}>
+                              {match.teamB}
+                            </td>
+                            <td className="px-4 py-3">{match.score}</td>
+                            <td className="px-4 py-3">
+                              {match.enteredBy || '—'}
+                            </td>
+                          </tr>
+                        )
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1386,25 +1431,25 @@ function App() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setInfoTab('match-engine')}
+                onClick={() => setInfoTab('match-engine-plain')}
                 className={`rounded-xl border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
-                  infoTab === 'match-engine'
+                  infoTab === 'match-engine-plain'
                     ? 'border-slate-900 bg-slate-900 text-white'
                     : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-100'
                 }`}
               >
-                Match Engine
+                Match Engine (Plain)
               </button>
               <button
                 type="button"
-                onClick={() => setInfoTab('standings')}
+                onClick={() => setInfoTab('standings-plain')}
                 className={`rounded-xl border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
-                  infoTab === 'standings'
+                  infoTab === 'standings-plain'
                     ? 'border-slate-900 bg-slate-900 text-white'
                     : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-100'
                 }`}
               >
-                Standings
+                Standings (Plain)
               </button>
             </div>
 

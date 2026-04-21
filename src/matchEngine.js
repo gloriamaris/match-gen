@@ -314,6 +314,21 @@ const formatRoundOutput = (round) => {
   }
 }
 
+const enforceExclusivePlayers = (players, exclusiveIds) => {
+  const selected = []
+  let exclusivePicked = false
+
+  players.forEach((player) => {
+    if (exclusiveIds.has(player.id)) {
+      if (exclusivePicked) return
+      exclusivePicked = true
+    }
+    selected.push(player)
+  })
+
+  return selected
+}
+
 export {
   buildRoundFromPlayers,
   sortPlayersBySkill,
@@ -323,4 +338,5 @@ export {
   buildNextRound,
   refillCourts,
   formatRoundOutput,
+  enforceExclusivePlayers,
 }
