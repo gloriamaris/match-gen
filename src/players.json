@@ -21,13 +21,6 @@
     "court": 1
   },
   {
-    "id": "player-7",
-    "name": "Aldan Campilan",
-    "duprRating": "",
-    "clubRating": "3.1",
-    "court": 1
-  },
-  {
     "id": "player-2",
     "name": "Aldren Cole",
     "duprRating": "2.751",
@@ -42,22 +35,22 @@
     "court": 1
   },
   {
+    "id": "player-7",
+    "name": "Aldan Campilan",
+    "duprRating": "",
+    "clubRating": "3.1",
+    "court": 1
+  },
+  {
     "id": "player-8",
     "name": "Princess Andrea Flores",
     "duprRating": "",
-    "clubRating": "2.7",
+    "clubRating": "3.0",
     "court": 1
   },
   {
-    "id": "player-9",
-    "name": "John Eric Palen",
-    "duprRating": "",
-    "clubRating": "2.5",
-    "court": 1
-  },
-  {
-    "id": "player-10",
-    "name": "Yor Joshua",
+    "id": "player-13",
+    "name": "Abegelle Bengil",
     "duprRating": "",
     "clubRating": "2.5",
     "court": 2
@@ -70,22 +63,22 @@
     "court": 2
   },
   {
+    "id": "player-9",
+    "name": "John Eric Palen",
+    "duprRating": "",
+    "clubRating": "2.5",
+    "court": 1
+  },
+  {
+    "id": "player-6",
+    "name": "KC Francheska Blando",
+    "duprRating": "",
+    "clubRating": "2.5",
+    "court": 1
+  },
+  {
     "id": "player-12",
     "name": "Khryzelle Joyce Macascas",
-    "duprRating": "",
-    "clubRating": "2.5",
-    "court": 2
-  },
-  {
-    "id": "player-13",
-    "name": "Abegelle Bengil",
-    "duprRating": "",
-    "clubRating": "2.5",
-    "court": 2
-  },
-  {
-    "id": "player-14",
-    "name": "Rieno Vincent Mabanglo",
     "duprRating": "",
     "clubRating": "2.5",
     "court": 2
@@ -98,13 +91,6 @@
     "court": 2
   },
   {
-    "id": "player-16",
-    "name": "Mei Arendain",
-    "duprRating": "",
-    "clubRating": "2.5",
-    "court": 2
-  },
-  {
     "id": "player-17",
     "name": "Ma. Stephany Bas",
     "duprRating": "",
@@ -112,10 +98,24 @@
     "court": 2
   },
   {
-    "id": "player-6",
-    "name": "KC Francheska Blando",
+    "id": "player-16",
+    "name": "Mei Arendain",
     "duprRating": "",
     "clubRating": "2.5",
-    "court": 1
+    "court": 2
+  },
+  {
+    "id": "player-14",
+    "name": "Rieno Vincent Mabanglo",
+    "duprRating": "",
+    "clubRating": "2.5",
+    "court": 2
+  },
+  {
+    "id": "player-10",
+    "name": "Yor Joshua",
+    "duprRating": "",
+    "clubRating": "2.5",
+    "court": 2
   }
 ]

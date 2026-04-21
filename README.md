@@ -1,3 +1,12 @@
+# Match Gen
+
+## Documentation
+
+- Match engine: `docs/match-engine.md`
+- Standings: `docs/standings.md`
+
+---
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
