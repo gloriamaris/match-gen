@@ -153,6 +153,16 @@ function App() {
     password: '',
     error: '',
   })
+  const [refreshCounts, setRefreshCounts] = useState({
+    champions: 0,
+    battlefield: 0,
+  })
+  const [refreshModal, setRefreshModal] = useState({
+    isOpen: false,
+    courtId: null,
+    password: '',
+    error: '',
+  })
   const [toastMessage, setToastMessage] = useState('')
   const signatureRef = useRef(null)
   const checkedInCount = players.filter((player) => player.checkedIn).length
@@ -192,6 +202,7 @@ function App() {
     setPlayers(basePlayers)
     setCourtMatchups({ champions: null, battlefield: null })
     setCourtStatus({ champions: 'idle', battlefield: 'idle' })
+    setRefreshCounts({ champions: 0, battlefield: 0 })
     setMatchHistory([])
     setActiveView('courts')
     if (typeof window !== 'undefined') {
@@ -200,6 +211,24 @@ function App() {
     }
     setToastMessage('Storage cleared')
     closeResetModal()
+  }
+
+  const openRefreshModal = (courtId) => {
+    setRefreshModal({
+      isOpen: true,
+      courtId,
+      password: '',
+      error: '',
+    })
+  }
+
+  const closeRefreshModal = () => {
+    setRefreshModal({
+      isOpen: false,
+      courtId: null,
+      password: '',
+      error: '',
+    })
   }
 
   const openAddModal = () => {
@@ -296,7 +325,11 @@ function App() {
     )
   }
 
-  const handleGenerateCourts = (courtId) => {
+  const handleGenerateCourts = (courtId, options = {}) => {
+    if (refreshCounts[courtId] >= 1 && !options.force) {
+      openRefreshModal(courtId)
+      return
+    }
     const occupiedPlayers = new Set(
       (courtId === 'battlefield'
         ? courtMatchups.champions
@@ -309,19 +342,39 @@ function App() {
     if (eligiblePlayers.length < 4) return
     if (courtId === 'battlefield' && isBattlefieldDisabled) return
 
-    const allZeroGames = eligiblePlayers.every(
-      (player) => (player.gamesPlayed ?? 0) === 0
+    const minGames = eligiblePlayers.reduce((min, player) => {
+      const games = player.gamesPlayed ?? 0
+      return games < min ? games : min
+    }, Number.POSITIVE_INFINITY)
+
+    const buildRotationPool = () => {
+      const remaining = [...eligiblePlayers].sort((a, b) => {
+        const gamesA = a.gamesPlayed ?? 0
+        const gamesB = b.gamesPlayed ?? 0
+        if (gamesA !== gamesB) return gamesA - gamesB
+        return a.name.localeCompare(b.name)
+      })
+      const pool = []
+
+      while (pool.length < 8 && remaining.length > 0) {
+        const nextGames = remaining[0].gamesPlayed ?? 0
+        const group = remaining.filter(
+          (player) => (player.gamesPlayed ?? 0) === nextGames
+        )
+        remaining.splice(0, group.length)
+        pool.push(...group)
+      }
+
+      return pool.slice(0, 8)
+    }
+
+    const zeroGamePlayers = eligiblePlayers.filter(
+      (player) => (player.gamesPlayed ?? 0) === minGames
     )
-    const rotationPool = allZeroGames
-      ? sortPlayersBySkill(eligiblePlayers).slice(0, 8)
-      : [...eligiblePlayers]
-          .sort((a, b) => {
-            const gamesA = a.gamesPlayed ?? 0
-            const gamesB = b.gamesPlayed ?? 0
-            if (gamesA !== gamesB) return gamesA - gamesB
-            return a.name.localeCompare(b.name)
-          })
-          .slice(0, 8)
+    const rotationPool =
+      zeroGamePlayers.length >= 8
+        ? sortPlayersBySkill(zeroGamePlayers).slice(0, 8)
+        : buildRotationPool()
 
     const sorted = sortPlayersBySkill(rotationPool)
     const championsPlayers = sorted.slice(0, 4)
@@ -342,6 +395,7 @@ function App() {
     if (courtId === 'battlefield') {
       setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
     }
+    setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
   }
 
   const openScoreModal = (courtId) => {
@@ -459,15 +513,31 @@ function App() {
     if (scoreModal.courtId === 'champions') {
       setCourtMatchups((prev) => ({ ...prev, champions: null }))
       setCourtStatus((prev) => ({ ...prev, champions: 'waiting' }))
+      setRefreshCounts((prev) => ({ ...prev, champions: 0 }))
     }
 
     if (scoreModal.courtId === 'battlefield') {
       setCourtMatchups((prev) => ({ ...prev, battlefield: null }))
       setCourtStatus((prev) => ({ ...prev, battlefield: 'waiting' }))
+      setRefreshCounts((prev) => ({ ...prev, battlefield: 0 }))
     }
 
     setToastMessage('Score saved successfully')
     closeScoreModal()
+  }
+
+  const confirmRefresh = (event) => {
+    event.preventDefault()
+    if (refreshModal.password !== '123456') {
+      setRefreshModal((prev) => ({
+        ...prev,
+        error: 'Incorrect password',
+      }))
+      return
+    }
+    const courtId = refreshModal.courtId
+    closeRefreshModal()
+    handleGenerateCourts(courtId, { force: true })
   }
 
   return (
@@ -1264,6 +1334,66 @@ function App() {
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
                 >
                   Reset
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {refreshModal.isOpen ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={closeRefreshModal}
+            aria-hidden="true"
+          />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Refresh Court
+              </h2>
+              <button
+                type="button"
+                onClick={closeRefreshModal}
+                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close refresh modal"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <form className="mt-4 space-y-4" onSubmit={confirmRefresh}>
+              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Password
+                <input
+                  type="password"
+                  value={refreshModal.password}
+                  onChange={(event) =>
+                    setRefreshModal((prev) => ({
+                      ...prev,
+                      password: event.target.value,
+                      error: '',
+                    }))
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                  placeholder="Enter password"
+                />
+              </label>
+              {refreshModal.error ? (
+                <p className="text-xs text-red-500">{refreshModal.error}</p>
+              ) : null}
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeRefreshModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
+                >
+                  Confirm
                 </button>
               </div>
             </form>
