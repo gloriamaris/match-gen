@@ -115,6 +115,7 @@ function App() {
   const [players, setPlayers] = useState(loadPlayers)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [activeView, setActiveView] = useState('courts')
+  const [exportMenuOpen, setExportMenuOpen] = useState(null)
   const [modalMode, setModalMode] = useState('add')
   const [editingId, setEditingId] = useState(null)
   const [infoModalOpen, setInfoModalOpen] = useState(false)
@@ -163,6 +164,8 @@ function App() {
     password: '',
     error: '',
   })
+  const standingsTableRef = useRef(null)
+  const historyTableRef = useRef(null)
   const [toastMessage, setToastMessage] = useState('')
   const signatureRef = useRef(null)
   const checkedInCount = players.filter((player) => player.checkedIn).length
@@ -540,6 +543,106 @@ function App() {
     handleGenerateCourts(courtId, { force: true })
   }
 
+  const escapeCsvValue = (value) => {
+    const text = String(value ?? '')
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }
+
+  const downloadCsv = (filename, rows) => {
+    const csv = rows
+      .map((row) => row.map(escapeCsvValue).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportStandingsCsv = () => {
+    const rows = [
+      ['Rank', 'Player', 'Wins', 'Losses', 'PD', 'Games'],
+      ...[...players]
+        .sort((a, b) => {
+          if (b.wins !== a.wins) return b.wins - a.wins
+          if (b.pointDifferential !== a.pointDifferential) {
+            return b.pointDifferential - a.pointDifferential
+          }
+          return 0
+        })
+        .map((player, index) => [
+          index + 1,
+          player.name,
+          player.wins,
+          player.losses,
+          player.pointDifferential,
+          player.gamesPlayed,
+        ]),
+    ]
+    downloadCsv('standings.csv', rows)
+  }
+
+  const exportHistoryCsv = () => {
+    const rows = [
+      ['Court', 'Team A', 'Team B', 'Score', 'Verified By'],
+      ...matchHistory.map((match) => [
+        match.court,
+        match.teamA,
+        match.teamB,
+        match.score,
+        match.enteredBy || '',
+      ]),
+    ]
+    downloadCsv('match-history.csv', rows)
+  }
+
+  const exportTableAsPdf = (title, tableRef, filename) => {
+    if (!tableRef.current) return
+    const tableHtml = tableRef.current.outerHTML
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${title}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
+            h1 { font-size: 18px; margin: 0 0 16px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; }
+            th { background: #f8fafc; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+            td.text-center, th.text-center { text-align: center; }
+          </style>
+        </head>
+        <body>
+          <h1>${title}</h1>
+          ${tableHtml}
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+    printWindow.focus()
+    printWindow.print()
+    if (filename) {
+      try {
+        printWindow.document.title = filename
+      } catch {
+        // noop: some browsers block title changes after print
+      }
+    }
+  }
+
+  const exportStandingsPdf = () => {
+    exportTableAsPdf('Standings', standingsTableRef, 'standings.pdf')
+  }
+
+  const exportHistoryPdf = () => {
+    exportTableAsPdf('Match History', historyTableRef, 'match-history.pdf')
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm sm:min-h-[560px] sm:flex-row">
@@ -690,16 +793,58 @@ function App() {
                 <h2 className="text-lg font-semibold text-slate-900">
                   Standings
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setActiveView('courts')}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Back to courts
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExportMenuOpen((prev) =>
+                          prev === 'standings' ? null : 'standings'
+                        )
+                      }
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                    >
+                      Export
+                    </button>
+                    {exportMenuOpen === 'standings' ? (
+                      <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-lg">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            exportStandingsCsv()
+                            setExportMenuOpen(null)
+                          }}
+                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Export as CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            exportStandingsPdf()
+                            setExportMenuOpen(null)
+                          }}
+                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Export as PDF
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveView('courts')}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                  >
+                    Back to courts
+                  </button>
+                </div>
               </div>
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table className="w-full text-left text-sm text-slate-700">
+                <table
+                  ref={standingsTableRef}
+                  className="w-full text-left text-sm text-slate-700"
+                >
                   <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-4 py-3">#</th>
@@ -765,16 +910,58 @@ function App() {
                 <h2 className="text-lg font-semibold text-slate-900">
                   Match History
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setActiveView('courts')}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Back to courts
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExportMenuOpen((prev) =>
+                          prev === 'history' ? null : 'history'
+                        )
+                      }
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                    >
+                      Export
+                    </button>
+                    {exportMenuOpen === 'history' ? (
+                      <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-lg">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            exportHistoryCsv()
+                            setExportMenuOpen(null)
+                          }}
+                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Export as CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            exportHistoryPdf()
+                            setExportMenuOpen(null)
+                          }}
+                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Export as PDF
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveView('courts')}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                  >
+                    Back to courts
+                  </button>
+                </div>
               </div>
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table className="w-full text-left text-sm text-slate-700">
+                <table
+                  ref={historyTableRef}
+                  className="w-full text-left text-sm text-slate-700"
+                >
                   <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-4 py-3">Court</th>
