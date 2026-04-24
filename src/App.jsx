@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Check,
   ClipboardList,
+  Home,
   Info,
   LayoutGrid,
   Plus,
-  RefreshCw,
   RotateCcw,
   Trophy,
   Users,
   X,
 } from 'lucide-react'
 import playersData from './players.json'
-import SignatureCanvas from 'react-signature-canvas'
 import ReactMarkdown from 'react-markdown'
+import AppLayout from './components/AppLayout'
+import CourtsView from './components/CourtsView'
+import HistoryView from './components/HistoryView'
+import PlayersView from './components/PlayersView'
+import StandingsView from './components/StandingsView'
 import {
   buildRoundFromPlayers,
   enforceExclusivePlayers,
@@ -59,6 +62,7 @@ const basePlayers = playersData.map((player) => {
     checkedIn: false,
     wins: 0,
     losses: 0,
+    winStreak: 0,
     gamesPlayed: 0,
     pointsFor: 0,
     pointsAgainst: 0,
@@ -91,6 +95,7 @@ const loadPlayers = () => {
         clubRating,
         wins: player.wins ?? 0,
         losses: player.losses ?? 0,
+        winStreak: player.winStreak ?? 0,
         gamesPlayed: player.gamesPlayed ?? 0,
         pointsFor: player.pointsFor ?? 0,
         pointsAgainst: player.pointsAgainst ?? 0,
@@ -149,6 +154,10 @@ function App() {
     champions: 'idle',
     battlefield: 'idle',
   })
+  const [courtHolds, setCourtHolds] = useState({
+    champions: [],
+    battlefield: [],
+  })
   const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
     name: '',
@@ -164,11 +173,38 @@ function App() {
     scoreB: '',
     enteredBy: '',
   })
+  const [manualMatchModal, setManualMatchModal] = useState({
+    isOpen: false,
+    court: '',
+    teamAIds: ['', ''],
+    teamBIds: ['', ''],
+    scoreA: '',
+    scoreB: '',
+    verifiedBy: '',
+  })
   const [scoreErrors, setScoreErrors] = useState({
     scoreA: '',
     scoreB: '',
     verifiedBy: '',
-    signature: '',
+  })
+  const [manualMatchErrors, setManualMatchErrors] = useState({
+    court: '',
+    teamA: '',
+    teamB: '',
+    scoreA: '',
+    scoreB: '',
+    duplicate: '',
+  })
+  const [editCourtModal, setEditCourtModal] = useState({
+    isOpen: false,
+    courtId: null,
+    teamAIds: ['', ''],
+    teamBIds: ['', ''],
+  })
+  const [editCourtErrors, setEditCourtErrors] = useState({
+    teamA: '',
+    teamB: '',
+    duplicate: '',
   })
   const [resetModal, setResetModal] = useState({
     isOpen: false,
@@ -188,7 +224,6 @@ function App() {
   const standingsTableRef = useRef(null)
   const historyTableRef = useRef(null)
   const [toastMessage, setToastMessage] = useState('')
-  const signatureRef = useRef(null)
   const checkedInCount = players.filter((player) => player.checkedIn).length
   const isBattlefieldDisabled = checkedInCount < 8
   const infoContent =
@@ -237,6 +272,7 @@ function App() {
     setPlayers(basePlayers)
     setCourtMatchups({ champions: null, battlefield: null })
     setCourtStatus({ champions: 'idle', battlefield: 'idle' })
+    setCourtHolds({ champions: [], battlefield: [] })
     setRefreshCounts({ champions: 0, battlefield: 0 })
     setMatchHistory([])
     setActiveView('courts')
@@ -316,6 +352,7 @@ function App() {
         checkedIn: false,
         wins: 0,
         losses: 0,
+        winStreak: 0,
         gamesPlayed: 0,
         pointsFor: 0,
         pointsAgainst: 0,
@@ -353,11 +390,53 @@ function App() {
   }
 
   const handleCheckIn = (playerId) => {
+    setPlayers((prev) => {
+      const minGames = prev.reduce((min, player) => {
+        if (!player.checkedIn || player.id === playerId) return min
+        const games = player.gamesPlayed ?? 0
+        return games < min ? games : min
+      }, Number.POSITIVE_INFINITY)
+      const normalizedGames = Number.isFinite(minGames) ? minGames : 0
+
+      return prev.map((player) => {
+        if (player.id !== playerId) return player
+        const currentGames = player.gamesPlayed ?? 0
+        return {
+          ...player,
+          checkedIn: true,
+          gamesPlayed: Math.max(currentGames, normalizedGames),
+        }
+      })
+    })
+  }
+
+  const handleCheckOut = (playerId) => {
     setPlayers((prev) =>
       prev.map((player) =>
-        player.id === playerId ? { ...player, checkedIn: true } : player
+        player.id === playerId ? { ...player, checkedIn: false } : player
       )
     )
+    setCourtHolds((prev) => ({
+      champions: (prev.champions ?? []).filter((id) => id !== playerId),
+      battlefield: (prev.battlefield ?? []).filter((id) => id !== playerId),
+    }))
+    const clearIfContainsPlayer = (teams) => {
+      if (!Array.isArray(teams)) return teams
+      const containsPlayer = teams.some((team) =>
+        team.some((player) => player.id === playerId)
+      )
+      return containsPlayer ? null : teams
+    }
+    const nextMatchups = {
+      champions: clearIfContainsPlayer(courtMatchups.champions),
+      battlefield: clearIfContainsPlayer(courtMatchups.battlefield),
+    }
+    setCourtMatchups(nextMatchups)
+    setCourtStatus((prev) => ({
+      ...prev,
+      champions: nextMatchups.champions ? prev.champions : 'waiting',
+      battlefield: nextMatchups.battlefield ? prev.battlefield : 'waiting',
+    }))
   }
 
   const handleGenerateCourts = (courtId, options = {}) => {
@@ -371,27 +450,37 @@ function App() {
         : courtMatchups.battlefield
       )?.flatMap((team) => team.map((player) => player.id)) ?? []
     )
+    const holdIds = new Set(courtHolds[courtId] ?? [])
+    const holdPlayers = (courtHolds[courtId] ?? [])
+      .map((playerId) => players.find((player) => player.id === playerId))
+      .filter(Boolean)
     const eligiblePlayers = players.filter(
-      (player) => player.checkedIn && !occupiedPlayers.has(player.id)
+      (player) =>
+        player.checkedIn &&
+        !occupiedPlayers.has(player.id) &&
+        !holdIds.has(player.id)
     )
-    if (eligiblePlayers.length < 4) return
+    if (holdPlayers.length + eligiblePlayers.length < 4) return
     if (courtId === 'battlefield' && isBattlefieldDisabled) return
 
+    const targetSize = Math.max(0, 4 - holdPlayers.length)
     const minGames = eligiblePlayers.reduce((min, player) => {
       const games = player.gamesPlayed ?? 0
       return games < min ? games : min
     }, Number.POSITIVE_INFINITY)
 
-    const buildRotationPool = () => {
-      const remaining = [...eligiblePlayers].sort((a, b) => {
-        const gamesA = a.gamesPlayed ?? 0
-        const gamesB = b.gamesPlayed ?? 0
-        if (gamesA !== gamesB) return gamesA - gamesB
-        return a.name.localeCompare(b.name)
-      })
+    const sortByGames = (a, b) => {
+      const gamesA = a.gamesPlayed ?? 0
+      const gamesB = b.gamesPlayed ?? 0
+      if (gamesA !== gamesB) return gamesA - gamesB
+      return a.name.localeCompare(b.name)
+    }
+
+    const buildRotationPool = (count) => {
+      const remaining = [...eligiblePlayers].sort(sortByGames)
       const pool = []
 
-      while (pool.length < 8 && remaining.length > 0) {
+      while (pool.length < count && remaining.length > 0) {
         const nextGames = remaining[0].gamesPlayed ?? 0
         const group = remaining.filter(
           (player) => (player.gamesPlayed ?? 0) === nextGames
@@ -400,16 +489,16 @@ function App() {
         pool.push(...group)
       }
 
-      return pool.slice(0, 8)
+      return pool.slice(0, count)
     }
 
     const zeroGamePlayers = eligiblePlayers.filter(
       (player) => (player.gamesPlayed ?? 0) === minGames
     )
     const initialPool =
-      zeroGamePlayers.length >= 8
-        ? sortPlayersBySkill(zeroGamePlayers).slice(0, 8)
-        : buildRotationPool()
+      targetSize > 0 && zeroGamePlayers.length >= targetSize
+        ? [...zeroGamePlayers].sort(sortByGames).slice(0, targetSize)
+        : buildRotationPool(targetSize)
     const poolWithStandby = enforceExclusivePlayers(
       initialPool,
       ADMIN_STANDBY_IDS
@@ -417,15 +506,10 @@ function App() {
     const selectedIds = new Set(poolWithStandby.map((player) => player.id))
     const fallbackPool = eligiblePlayers
       .filter((player) => !selectedIds.has(player.id))
-      .sort((a, b) => {
-        const gamesA = a.gamesPlayed ?? 0
-        const gamesB = b.gamesPlayed ?? 0
-        if (gamesA !== gamesB) return gamesA - gamesB
-        return a.name.localeCompare(b.name)
-      })
+      .sort(sortByGames)
     const rotationPool = [...poolWithStandby]
 
-    while (rotationPool.length < 8 && fallbackPool.length > 0) {
+    while (rotationPool.length < targetSize && fallbackPool.length > 0) {
       const nextPlayer = fallbackPool.shift()
       if (
         ADMIN_STANDBY_IDS.has(nextPlayer.id) &&
@@ -436,17 +520,15 @@ function App() {
       rotationPool.push(nextPlayer)
     }
 
-    const sorted = sortPlayersBySkill(rotationPool)
-    const championsPlayers = sorted.slice(0, 4)
-    const battlefieldPlayers = sorted.slice(-4)
-    const round = buildRoundFromPlayers(championsPlayers, battlefieldPlayers)
+    const selectedPlayers = [...holdPlayers, ...rotationPool].slice(0, 4)
+    const round = buildRoundFromPlayers(selectedPlayers, [])
 
     setCourtMatchups((prev) => ({
       ...prev,
       champions: courtId === 'champions' ? round.champions : prev.champions,
       battlefield:
         courtId === 'battlefield' && !isBattlefieldDisabled
-          ? round.battlefield
+          ? round.champions
           : prev.battlefield,
     }))
     if (courtId === 'champions') {
@@ -475,16 +557,14 @@ function App() {
       scoreA: '',
       scoreB: '',
       verifiedBy: '',
-      signature: '',
     })
-    signatureRef.current?.clear()
   }
 
   const closeScoreModal = () => {
     setScoreModal({
       isOpen: false,
       courtId: null,
-      teamA: [],
+      teamA: [], 
       teamB: [],
       scoreA: '',
       scoreB: '',
@@ -494,21 +574,211 @@ function App() {
       scoreA: '',
       scoreB: '',
       verifiedBy: '',
-      signature: '',
     })
-    signatureRef.current?.clear()
+  }
+
+  const openManualMatchModal = () => {
+    setExportMenuOpen(null)
+    setManualMatchModal({
+      isOpen: true,
+      court: 'Court 1',
+      teamAIds: ['', ''],
+      teamBIds: ['', ''],
+      scoreA: '',
+      scoreB: '',
+      verifiedBy: '',
+    })
+    setManualMatchErrors({
+      court: '',
+      teamA: '',
+      teamB: '',
+      scoreA: '',
+      scoreB: '',
+      duplicate: '',
+    })
+  }
+
+  const closeManualMatchModal = () => {
+    setManualMatchModal({
+      isOpen: false,
+      court: '',
+      teamAIds: ['', ''],
+      teamBIds: ['', ''],
+      scoreA: '',
+      scoreB: '',
+      verifiedBy: '',
+    })
+    setManualMatchErrors({
+      court: '',
+      teamA: '',
+      teamB: '',
+      scoreA: '',
+      scoreB: '',
+      duplicate: '',
+    })
+  }
+
+  const handleManualMatchSubmit = (event) => {
+    event.preventDefault()
+    const scoreA = Number.parseInt(manualMatchModal.scoreA, 10)
+    const scoreB = Number.parseInt(manualMatchModal.scoreB, 10)
+    const teamAIds = manualMatchModal.teamAIds.filter(Boolean)
+    const teamBIds = manualMatchModal.teamBIds.filter(Boolean)
+    const allIds = [...teamAIds, ...teamBIds]
+    const hasDuplicates = new Set(allIds).size !== allIds.length
+    const nextErrors = {
+      court: manualMatchModal.court.trim() ? '' : 'Court is required',
+      teamA: teamAIds.length === 2 ? '' : 'Select two players',
+      teamB: teamBIds.length === 2 ? '' : 'Select two players',
+      scoreA: Number.isNaN(scoreA) ? 'Score is required' : '',
+      scoreB: Number.isNaN(scoreB) ? 'Score is required' : '',
+      duplicate: hasDuplicates ? 'Players can only appear once' : '',
+    }
+
+    setManualMatchErrors(nextErrors)
+
+    if (
+      nextErrors.court ||
+      nextErrors.teamA ||
+      nextErrors.teamB ||
+      nextErrors.scoreA ||
+      nextErrors.scoreB ||
+      nextErrors.duplicate
+    ) {
+      return
+    }
+
+    const teamAPlayers = teamAIds
+      .map((id) => players.find((player) => player.id === id))
+      .filter(Boolean)
+    const teamBPlayers = teamBIds
+      .map((id) => players.find((player) => player.id === id))
+      .filter(Boolean)
+    const winnerIds = new Set(
+      (scoreA > scoreB ? teamAPlayers : teamBPlayers).map((player) => player.id)
+    )
+
+    setPlayers((prev) =>
+      prev.map((player) => {
+        const isTeamA = teamAIds.includes(player.id)
+        const isTeamB = teamBIds.includes(player.id)
+        if (!isTeamA && !isTeamB) return player
+
+        const pointsFor = player.pointsFor ?? 0
+        const pointsAgainst = player.pointsAgainst ?? 0
+        const gamesPlayed = player.gamesPlayed ?? 0
+        const isWinner = winnerIds.has(player.id)
+        const nextWinStreak = isWinner ? (player.winStreak ?? 0) + 1 : 0
+        const nextPointsFor = pointsFor + (isTeamA ? scoreA : scoreB)
+        const nextPointsAgainst = pointsAgainst + (isTeamA ? scoreB : scoreA)
+        const nextPointDifferential = nextPointsFor - nextPointsAgainst
+
+        return {
+          ...player,
+          wins: isWinner ? player.wins + 1 : player.wins,
+          losses: !isWinner ? player.losses + 1 : player.losses,
+          winStreak: nextWinStreak,
+          gamesPlayed: gamesPlayed + 1,
+          pointsFor: nextPointsFor,
+          pointsAgainst: nextPointsAgainst,
+          pointDifferential: nextPointDifferential,
+        }
+      })
+    )
+
+    setMatchHistory((prev) => [
+      {
+        id: crypto.randomUUID(),
+        court: manualMatchModal.court.trim(),
+        teamA: teamAPlayers.map((player) => player.name).join(' / '),
+        teamB: teamBPlayers.map((player) => player.name).join(' / '),
+        score: `${scoreA} - ${scoreB}`,
+        enteredBy: manualMatchModal.verifiedBy.trim(),
+        signature: '',
+      },
+      ...prev,
+    ])
+    setToastMessage('Match added to history')
+    closeManualMatchModal()
+  }
+
+  const openEditCourtModal = (courtId) => {
+    const currentMatchup = courtMatchups[courtId]
+    const teamAIds = currentMatchup?.[0]?.map((player) => player.id) ?? []
+    const teamBIds = currentMatchup?.[1]?.map((player) => player.id) ?? []
+    const normalizeIds = (ids) => [ids[0] ?? '', ids[1] ?? '']
+
+    setEditCourtModal({
+      isOpen: true,
+      courtId,
+      teamAIds: normalizeIds(teamAIds),
+      teamBIds: normalizeIds(teamBIds),
+    })
+    setEditCourtErrors({
+      teamA: '',
+      teamB: '',
+      duplicate: '',
+    })
+  }
+
+  const closeEditCourtModal = () => {
+    setEditCourtModal({
+      isOpen: false,
+      courtId: null,
+      teamAIds: ['', ''],
+      teamBIds: ['', ''],
+    })
+    setEditCourtErrors({
+      teamA: '',
+      teamB: '',
+      duplicate: '',
+    })
+  }
+
+  const handleEditCourtSubmit = (event) => {
+    event.preventDefault()
+    const teamAIds = editCourtModal.teamAIds.filter(Boolean)
+    const teamBIds = editCourtModal.teamBIds.filter(Boolean)
+    const allIds = [...teamAIds, ...teamBIds]
+    const hasDuplicates = new Set(allIds).size !== allIds.length
+    const nextErrors = {
+      teamA: teamAIds.length === 2 ? '' : 'Select two players',
+      teamB: teamBIds.length === 2 ? '' : 'Select two players',
+      duplicate: hasDuplicates ? 'Players can only appear once' : '',
+    }
+
+    setEditCourtErrors(nextErrors)
+
+    if (nextErrors.teamA || nextErrors.teamB || nextErrors.duplicate) {
+      return
+    }
+
+    const teamAPlayers = teamAIds
+      .map((id) => players.find((player) => player.id === id))
+      .filter(Boolean)
+    const teamBPlayers = teamBIds
+      .map((id) => players.find((player) => player.id === id))
+      .filter(Boolean)
+
+    setCourtMatchups((prev) => ({
+      ...prev,
+      [editCourtModal.courtId]: [teamAPlayers, teamBPlayers],
+    }))
+    setCourtStatus((prev) => ({
+      ...prev,
+      [editCourtModal.courtId]: 'idle',
+    }))
+    closeEditCourtModal()
   }
 
   const handleScoreSubmit = (event) => {
     event.preventDefault()
     const scoreA = Number.parseInt(scoreModal.scoreA, 10)
     const scoreB = Number.parseInt(scoreModal.scoreB, 10)
-    const signatureEmpty = signatureRef.current?.isEmpty?.() ?? true
     const nextErrors = {
       scoreA: Number.isNaN(scoreA) ? 'Score is required' : '',
       scoreB: Number.isNaN(scoreB) ? 'Score is required' : '',
       verifiedBy: scoreModal.enteredBy ? '' : 'Select a verifier',
-      signature: signatureEmpty ? 'Signature is required' : '',
     }
 
     setScoreErrors(nextErrors)
@@ -516,11 +786,26 @@ function App() {
     if (
       nextErrors.scoreA ||
       nextErrors.scoreB ||
-      nextErrors.verifiedBy ||
-      nextErrors.signature
+      nextErrors.verifiedBy
     ) {
       return
     }
+
+    const isTeamAWin = scoreA > scoreB
+    const minGamesCheckedIn = players.reduce((min, player) => {
+      if (!player.checkedIn) return min
+      const games = player.gamesPlayed ?? 0
+      return games < min ? games : min
+    }, Number.POSITIVE_INFINITY)
+    const maxGamesForHold = Number.isFinite(minGamesCheckedIn)
+      ? minGamesCheckedIn + 1
+      : Number.POSITIVE_INFINITY
+    const winnerIds = new Set(
+      (isTeamAWin ? scoreModal.teamA : scoreModal.teamB).map(
+        (player) => player.id
+      )
+    )
+    const nextHoldIds = []
 
     setPlayers((prev) =>
       prev.map((player) => {
@@ -531,7 +816,16 @@ function App() {
         const pointsFor = player.pointsFor ?? 0
         const pointsAgainst = player.pointsAgainst ?? 0
         const gamesPlayed = player.gamesPlayed ?? 0
-        const isWinner = (scoreA > scoreB && isTeamA) || (scoreB > scoreA && isTeamB)
+        const isWinner = winnerIds.has(player.id)
+        const nextWinStreak = isWinner ? (player.winStreak ?? 0) + 1 : 0
+        const nextGames = gamesPlayed + 1
+        const staysOnCourt =
+          isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
+        const normalizedWinStreak = staysOnCourt ? nextWinStreak : 0
+
+        if (staysOnCourt) {
+          nextHoldIds.push(player.id)
+        }
 
         const nextPointsFor = pointsFor + (isTeamA ? scoreA : scoreB)
         const nextPointsAgainst = pointsAgainst + (isTeamA ? scoreB : scoreA)
@@ -541,22 +835,20 @@ function App() {
           ...player,
           wins: isWinner ? player.wins + 1 : player.wins,
           losses: !isWinner ? player.losses + 1 : player.losses,
-          gamesPlayed: gamesPlayed + 1,
+          winStreak: normalizedWinStreak,
+          gamesPlayed: nextGames,
           pointsFor: nextPointsFor,
           pointsAgainst: nextPointsAgainst,
           pointDifferential: nextPointDifferential,
         }
       })
     )
+    setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: nextHoldIds }))
 
     const teamAName = scoreModal.teamA.map((player) => player.name).join(' / ')
     const teamBName = scoreModal.teamB.map((player) => player.name).join(' / ')
     const courtLabel =
       scoreModal.courtId === 'champions' ? 'Court 1' : 'Court 2'
-    const signatureData = signatureRef.current?.isEmpty()
-      ? ''
-      : signatureRef.current?.getCanvas().toDataURL('image/png')
-
     setMatchHistory((prev) => [
       {
         id: crypto.randomUUID(),
@@ -565,7 +857,6 @@ function App() {
         teamB: teamBName,
         score: `${scoreA} - ${scoreB}`,
         enteredBy: scoreModal.enteredBy.trim(),
-        signature: signatureData,
       },
       ...prev,
     ])
@@ -682,484 +973,162 @@ function App() {
     exportTableAsPdf('Match History', historyTableRef, 'match-history.pdf')
   }
 
+  const sortedPlayers = [...players].sort((a, b) =>
+    a.name.localeCompare(b.name)
+  )
+  const selectedManualIds = new Set(
+    [...manualMatchModal.teamAIds, ...manualMatchModal.teamBIds].filter(Boolean)
+  )
+  const getAvailablePlayers = (currentId) =>
+    sortedPlayers.filter(
+      (player) => player.id === currentId || !selectedManualIds.has(player.id)
+    )
+  const checkedInPlayers = sortedPlayers.filter((player) => player.checkedIn)
+  const selectedCourtIds = new Set(
+    [...editCourtModal.teamAIds, ...editCourtModal.teamBIds].filter(Boolean)
+  )
+  const getAvailableCourtPlayers = (currentId) =>
+    checkedInPlayers.filter(
+      (player) => player.id === currentId || !selectedCourtIds.has(player.id)
+    )
+  const editCourtLabel =
+    courts.find((court) => court.id === editCourtModal.courtId)?.name ?? 'Court'
+
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 sm:px-6">
-      <div className="mx-auto flex w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm sm:min-h-[560px] sm:flex-row">
-        <aside className="flex w-full items-center gap-3 border-b border-slate-200 px-4 py-3 sm:w-20 sm:flex-col sm:justify-start sm:gap-5 sm:border-b-0 sm:border-r sm:px-3 sm:py-6">
-          <button
-            type="button"
-            onClick={() => setActiveView('courts')}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800"
-          >
-            <LayoutGrid className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={openAddModal}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-          >
-            <Plus className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('players')}
-            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-              activeView === 'players' ? 'bg-slate-100 text-slate-900' : ''
-            }`}
-          >
-            <Users className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('history')}
-            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-              activeView === 'history' ? 'bg-slate-100 text-slate-900' : ''
-            }`}
-          >
-            <ClipboardList className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('standings')}
-            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-              activeView === 'standings' ? 'bg-slate-100 text-slate-900' : ''
-            }`}
-          >
-            <Trophy className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={openInfoModal}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-            aria-label="Open documentation"
-          >
-            <Info className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={handleResetData}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-          >
-            <RotateCcw className="h-5 w-5" aria-hidden="true" />
-          </button>
-        </aside>
-
-        <main className="relative flex-1 px-4 py-6 sm:px-8 sm:py-10">
-          <h1 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">
-            HAPPY PICKLERS MATCH GENERATOR
-          </h1>
-          {activeView === 'players' ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Players
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => setActiveView('courts')}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Back to courts
-                </button>
-              </div>
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table className="w-full text-left text-sm text-slate-700">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3">#</th>
-                      <th className="px-4 py-3">Player Name</th>
-                      <th className="px-4 py-3">Rating</th>
-                      <th className="px-4 py-3">Type</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {players.map((player, index) => (
-                      <tr key={player.id}>
-                        <td className="px-4 py-3 text-slate-500">
-                          {index + 1}
-                        </td>
-                        <td className="px-4 py-3 font-medium text-slate-800">
-                          {player.name}
-                        </td>
-                        <td className="px-4 py-3">{player.rating}</td>
-                        <td className="px-4 py-3">{player.type}</td>
-                        <td className="px-4 py-3">
-                          {player.checkedIn ? (
-                            <span className="text-xs font-semibold uppercase text-slate-400">
-                              Checked In
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleCheckIn(player.id)}
-                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-                            >
-                              Check In
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(player)}
-                              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                            >
-                              Edit
-                            </button>
-                          {player.gamesPlayed > 0 || player.checkedIn ? null : (
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(player.id)}
-                              className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:border-red-300 hover:bg-red-50"
-                            >
-                              Delete
-                            </button>
-                          )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+    <>
+      <AppLayout
+        sidebar={
+          <>
+            <button
+              type="button"
+              onClick={() => setActiveView('courts')}
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm transition hover:bg-blue-700"
+              aria-label="Home"
+              title="Home"
+            >
+              <Home className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('courts')}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800"
+            >
+              <LayoutGrid className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+            >
+              <Plus className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('players')}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
+                activeView === 'players' ? 'bg-slate-100 text-slate-900' : ''
+              }`}
+            >
+              <Users className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('history')}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
+                activeView === 'history' ? 'bg-slate-100 text-slate-900' : ''
+              }`}
+            >
+              <ClipboardList className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('standings')}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
+                activeView === 'standings' ? 'bg-slate-100 text-slate-900' : ''
+              }`}
+            >
+              <Trophy className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={openInfoModal}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Open documentation"
+            >
+              <Info className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={handleResetData}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+            >
+              <RotateCcw className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </>
+        }
+      >
+        <h1 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">
+          HAPPY PICKLERS MATCH GENERATOR
+        </h1>
+        {activeView === 'players' ? (
+          <PlayersView
+            players={players}
+            onBack={() => setActiveView('courts')}
+            onCheckIn={handleCheckIn}
+            onCheckOut={handleCheckOut}
+            onEdit={openEditModal}
+            onDelete={handleDelete}
+          />
+        ) : activeView === 'standings' ? (
+          <StandingsView
+            players={players}
+            standingsTableRef={standingsTableRef}
+            exportMenuOpen={exportMenuOpen}
+            setExportMenuOpen={setExportMenuOpen}
+            onExportCsv={exportStandingsCsv}
+            onExportPdf={exportStandingsPdf}
+            onBack={() => setActiveView('courts')}
+          />
+        ) : activeView === 'history' ? (
+          <HistoryView
+            matchHistory={matchHistory}
+            historyTableRef={historyTableRef}
+            exportMenuOpen={exportMenuOpen}
+            setExportMenuOpen={setExportMenuOpen}
+            onExportCsv={exportHistoryCsv}
+            onExportPdf={exportHistoryPdf}
+            onAddMatch={openManualMatchModal}
+            onBack={() => setActiveView('courts')}
+          />
+        ) : (
+          <CourtsView
+            courts={courts}
+            defaultCourtTeams={defaultCourtTeams}
+            courtMatchups={courtMatchups}
+            courtStatus={courtStatus}
+            isBattlefieldDisabled={isBattlefieldDisabled}
+            onGenerateCourts={handleGenerateCourts}
+            onEditCourt={openEditCourtModal}
+            onOpenScore={openScoreModal}
+          />
+        )}
+        {activeView === 'courts' && checkedInCount < 4 ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center px-4">
+            <div className="absolute inset-0 rounded-2xl bg-slate-900/60" />
+            <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-lg">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Not enough players checked in
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                A game cannot start until at least 4 players have checked in.
+              </p>
+              <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
+                Currently checked in: {checkedInCount}
+              </p>
             </div>
-          ) : activeView === 'standings' ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Standings
-                </h2>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExportMenuOpen((prev) =>
-                          prev === 'standings' ? null : 'standings'
-                        )
-                      }
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                    >
-                      Export
-                    </button>
-                    {exportMenuOpen === 'standings' ? (
-                      <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-lg">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            exportStandingsCsv()
-                            setExportMenuOpen(null)
-                          }}
-                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Export as CSV
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            exportStandingsPdf()
-                            setExportMenuOpen(null)
-                          }}
-                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Export as PDF
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveView('courts')}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                  >
-                    Back to courts
-                  </button>
-                </div>
-              </div>
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table
-                  ref={standingsTableRef}
-                  className="w-full text-left text-sm text-slate-700"
-                >
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3">#</th>
-                      <th className="px-4 py-3">Player</th>
-                      <th className="px-4 py-3 text-center">Wins</th>
-                      <th className="px-4 py-3 text-center">Losses</th>
-                      <th className="px-4 py-3 text-center">PD</th>
-                      <th className="px-4 py-3 text-center">Games</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {[...players]
-                      .sort((a, b) => {
-                        if (b.wins !== a.wins) return b.wins - a.wins
-                        if (b.pointDifferential !== a.pointDifferential) {
-                          return b.pointDifferential - a.pointDifferential
-                        }
-                        return 0
-                      })
-                      .map((player, index) => {
-                        const hasStats =
-                          player.wins > 0 ||
-                          player.losses > 0 ||
-                          player.pointDifferential !== 0 ||
-                          player.gamesPlayed > 0
-
-                        return (
-                        <tr key={player.id}>
-                          <td className="px-4 py-3 text-slate-500">
-                            {index + 1}
-                          </td>
-                          <td
-                            className={`px-4 py-3 font-medium ${
-                              index < 4 && hasStats
-                                ? 'text-emerald-600'
-                                : 'text-slate-800'
-                            }`}
-                          >
-                            {player.name}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {player.wins}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {player.losses}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {player.pointDifferential}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            {player.gamesPlayed}
-                          </td>
-                        </tr>
-                        )
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : activeView === 'history' ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Match History
-                </h2>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExportMenuOpen((prev) =>
-                          prev === 'history' ? null : 'history'
-                        )
-                      }
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                    >
-                      Export
-                    </button>
-                    {exportMenuOpen === 'history' ? (
-                      <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-2 text-sm shadow-lg">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            exportHistoryCsv()
-                            setExportMenuOpen(null)
-                          }}
-                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Export as CSV
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            exportHistoryPdf()
-                            setExportMenuOpen(null)
-                          }}
-                          className="w-full rounded-lg px-3 py-2 text-left font-medium text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Export as PDF
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveView('courts')}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                  >
-                    Back to courts
-                  </button>
-                </div>
-              </div>
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <table
-                  ref={historyTableRef}
-                  className="w-full text-left text-sm text-slate-700"
-                >
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3">#</th>
-                      <th className="px-4 py-3">Court</th>
-                      <th className="px-4 py-3">Team A</th>
-                      <th className="px-4 py-3">Team B</th>
-                      <th className="px-4 py-3">Score</th>
-                      <th className="px-4 py-3">Verified</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {matchHistory.length === 0 ? (
-                      <tr>
-                        <td
-                          className="px-4 py-6 text-center text-sm text-slate-500"
-                          colSpan={6}
-                        >
-                          No games recorded yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      matchHistory.map((match, index) => {
-                        const [scoreA, scoreB] = match.score
-                          .split('-')
-                          .map((value) => Number.parseInt(value.trim(), 10))
-                        const hasWinner =
-                          !Number.isNaN(scoreA) &&
-                          !Number.isNaN(scoreB) &&
-                          scoreA !== scoreB
-                        const teamAClass =
-                          hasWinner && scoreA > scoreB
-                            ? 'text-emerald-600 font-semibold'
-                            : ''
-                        const teamBClass =
-                          hasWinner && scoreB > scoreA
-                            ? 'text-emerald-600 font-semibold'
-                            : ''
-
-                        return (
-                          <tr key={match.id}>
-                            <td className="px-4 py-3 text-slate-500">
-                              {index + 1}
-                            </td>
-                            <td className="px-4 py-3 font-medium text-slate-800">
-                              {match.court}
-                            </td>
-                            <td className={`px-4 py-3 ${teamAClass}`}>
-                              {match.teamA}
-                            </td>
-                            <td className={`px-4 py-3 ${teamBClass}`}>
-                              {match.teamB}
-                            </td>
-                            <td className="px-4 py-3">{match.score}</td>
-                            <td className="px-4 py-3">
-                              {match.enteredBy || '—'}
-                            </td>
-                          </tr>
-                        )
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <div className="grid gap-6 md:grid-cols-2">
-              {courts.map((court) => (
-                <div key={court.name} className="space-y-3">
-                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                    <div className="flex items-stretch">
-                      <div className="flex-1 divide-y divide-slate-200 text-sm font-medium text-slate-700">
-                        {(court.id === 'battlefield' && isBattlefieldDisabled
-                          ? ['Waiting for more players', 'Need 8 checked-in players']
-                          : court.id === 'champions' &&
-                              courtStatus.champions === 'waiting'
-                            ? ['Waiting for players', 'Click refresh to generate']
-                            : court.id === 'battlefield' &&
-                                courtStatus.battlefield === 'waiting'
-                              ? ['Waiting for players', 'Click refresh to generate']
-                              : (courtMatchups[court.id] ?? []).length
-                                ? courtMatchups[court.id].map((team) =>
-                                    team.map((player) => player.name).join(' / ')
-                                  )
-                                : defaultCourtTeams[court.id]
-                        ).map((team) => (
-                          <div
-                            key={team}
-                            className={`px-4 py-4 sm:px-5 ${
-                              (court.id === 'battlefield' && isBattlefieldDisabled) ||
-                              (court.id === 'champions' &&
-                                courtStatus.champions === 'waiting') ||
-                              (court.id === 'battlefield' &&
-                                courtStatus.battlefield === 'waiting')
-                                ? 'text-slate-400'
-                                : ''
-                            }`}
-                          >
-                            {team}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex w-12 flex-col items-center justify-between border-l border-slate-200 bg-slate-50 py-3 text-slate-600">
-                        <button
-                          type="button"
-                          onClick={() => handleGenerateCourts(court.id)}
-                          disabled={court.id === 'battlefield' && isBattlefieldDisabled}
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition ${
-                            court.id === 'battlefield' && isBattlefieldDisabled
-                              ? 'cursor-not-allowed opacity-40'
-                              : 'hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
-                          }`}
-                        >
-                          <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openScoreModal(court.id)}
-                          disabled={
-                            !courtMatchups[court.id] ||
-                            (court.id === 'battlefield' && isBattlefieldDisabled)
-                          }
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition ${
-                            courtMatchups[court.id]
-                              ? court.id === 'battlefield' && isBattlefieldDisabled
-                                ? 'cursor-not-allowed opacity-50'
-                                : 'hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800'
-                              : 'cursor-not-allowed opacity-50'
-                          }`}
-                        >
-                          <Check className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-center text-sm font-semibold text-slate-600">
-                    {court.name}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-          {activeView === 'courts' && checkedInCount < 4 ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center px-4">
-              <div className="absolute inset-0 rounded-2xl bg-slate-900/60" />
-              <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-lg">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Not enough players checked in
-                </h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  A game cannot start until at least 4 players have checked in.
-                </p>
-                <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
-                  Currently checked in: {checkedInCount}
-                </p>
-              </div>
-            </div>
-          ) : null}
-        </main>
-      </div>
+          </div>
+        ) : null}
+      </AppLayout>
 
       {isModalOpen ? (
         <div className="fixed inset-0 z-10 flex items-center justify-center px-4">
@@ -1275,6 +1244,353 @@ function App() {
         </div>
       ) : null}
 
+      {editCourtModal.isOpen ? (
+        <div className="fixed inset-0 z-10 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={closeEditCourtModal}
+            aria-hidden="true"
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Edit Court
+                </h2>
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  {editCourtLabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeEditCourtModal}
+                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close edit court modal"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form className="mt-4 space-y-4" onSubmit={handleEditCourtSubmit}>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Team A</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[0, 1].map((slot) => (
+                    <label
+                      key={`edit-team-a-${slot}`}
+                      className="flex flex-col gap-2 text-xs font-medium text-slate-600"
+                    >
+                      Player {slot + 1}
+                      <select
+                        value={editCourtModal.teamAIds[slot]}
+                        onChange={(event) =>
+                          setEditCourtModal((prev) => ({
+                            ...prev,
+                            teamAIds: prev.teamAIds.map((value, index) =>
+                              index === slot ? event.target.value : value
+                            ),
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                      >
+                        <option value="">Select player</option>
+                        {getAvailableCourtPlayers(
+                          editCourtModal.teamAIds[slot]
+                        ).map((player) => (
+                          <option key={player.id} value={player.id}>
+                            {player.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {editCourtErrors.teamA ? (
+                  <p className="text-xs text-red-500">
+                    {editCourtErrors.teamA}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Team B</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[0, 1].map((slot) => (
+                    <label
+                      key={`edit-team-b-${slot}`}
+                      className="flex flex-col gap-2 text-xs font-medium text-slate-600"
+                    >
+                      Player {slot + 3}
+                      <select
+                        value={editCourtModal.teamBIds[slot]}
+                        onChange={(event) =>
+                          setEditCourtModal((prev) => ({
+                            ...prev,
+                            teamBIds: prev.teamBIds.map((value, index) =>
+                              index === slot ? event.target.value : value
+                            ),
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                      >
+                        <option value="">Select player</option>
+                        {getAvailableCourtPlayers(
+                          editCourtModal.teamBIds[slot]
+                        ).map((player) => (
+                          <option key={player.id} value={player.id}>
+                            {player.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {editCourtErrors.teamB ? (
+                  <p className="text-xs text-red-500">
+                    {editCourtErrors.teamB}
+                  </p>
+                ) : null}
+                {editCourtErrors.duplicate ? (
+                  <p className="text-xs text-red-500">
+                    {editCourtErrors.duplicate}
+                  </p>
+                ) : null}
+              </div>
+
+              <p className="text-xs text-slate-500">
+                Only checked-in players are available.
+              </p>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeEditCourtModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
+                >
+                  Update court
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {manualMatchModal.isOpen ? (
+        <div className="fixed inset-0 z-10 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={closeManualMatchModal}
+            aria-hidden="true"
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Manual Match Entry
+              </h2>
+              <button
+                type="button"
+                onClick={closeManualMatchModal}
+                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close manual match modal"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form className="mt-4 space-y-4" onSubmit={handleManualMatchSubmit}>
+              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Court
+                <input
+                  type="text"
+                  value={manualMatchModal.court}
+                  onChange={(event) =>
+                    setManualMatchModal((prev) => ({
+                      ...prev,
+                      court: event.target.value,
+                    }))
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                  placeholder="Court 1"
+                />
+                {manualMatchErrors.court ? (
+                  <p className="text-xs text-red-500">
+                    {manualMatchErrors.court}
+                  </p>
+                ) : null}
+              </label>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Team A</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[0, 1].map((slot) => (
+                    <label
+                      key={`team-a-${slot}`}
+                      className="flex flex-col gap-2 text-xs font-medium text-slate-600"
+                    >
+                      Player {slot + 1}
+                      <select
+                        value={manualMatchModal.teamAIds[slot]}
+                        onChange={(event) =>
+                          setManualMatchModal((prev) => ({
+                            ...prev,
+                            teamAIds: prev.teamAIds.map((value, index) =>
+                              index === slot ? event.target.value : value
+                            ),
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                      >
+                        <option value="">Select player</option>
+                        {getAvailablePlayers(
+                          manualMatchModal.teamAIds[slot]
+                        ).map((player) => (
+                          <option key={player.id} value={player.id}>
+                            {player.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {manualMatchErrors.teamA ? (
+                  <p className="text-xs text-red-500">
+                    {manualMatchErrors.teamA}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Team B</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[0, 1].map((slot) => (
+                    <label
+                      key={`team-b-${slot}`}
+                      className="flex flex-col gap-2 text-xs font-medium text-slate-600"
+                    >
+                      Player {slot + 3}
+                      <select
+                        value={manualMatchModal.teamBIds[slot]}
+                        onChange={(event) =>
+                          setManualMatchModal((prev) => ({
+                            ...prev,
+                            teamBIds: prev.teamBIds.map((value, index) =>
+                              index === slot ? event.target.value : value
+                            ),
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                      >
+                        <option value="">Select player</option>
+                        {getAvailablePlayers(
+                          manualMatchModal.teamBIds[slot]
+                        ).map((player) => (
+                          <option key={player.id} value={player.id}>
+                            {player.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {manualMatchErrors.teamB ? (
+                  <p className="text-xs text-red-500">
+                    {manualMatchErrors.teamB}
+                  </p>
+                ) : null}
+                {manualMatchErrors.duplicate ? (
+                  <p className="text-xs text-red-500">
+                    {manualMatchErrors.duplicate}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                  Score A
+                  <input
+                    type="number"
+                    min="0"
+                    value={manualMatchModal.scoreA}
+                    onChange={(event) =>
+                      setManualMatchModal((prev) => ({
+                        ...prev,
+                        scoreA: event.target.value,
+                      }))
+                    }
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                    placeholder="0"
+                  />
+                  {manualMatchErrors.scoreA ? (
+                    <p className="text-xs text-red-500">
+                      {manualMatchErrors.scoreA}
+                    </p>
+                  ) : null}
+                </label>
+                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                  Score B
+                  <input
+                    type="number"
+                    min="0"
+                    value={manualMatchModal.scoreB}
+                    onChange={(event) =>
+                      setManualMatchModal((prev) => ({
+                        ...prev,
+                        scoreB: event.target.value,
+                      }))
+                    }
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                    placeholder="0"
+                  />
+                  {manualMatchErrors.scoreB ? (
+                    <p className="text-xs text-red-500">
+                      {manualMatchErrors.scoreB}
+                    </p>
+                  ) : null}
+                </label>
+              </div>
+
+              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Verified by
+                <input
+                  type="text"
+                  value={manualMatchModal.verifiedBy}
+                  onChange={(event) =>
+                    setManualMatchModal((prev) => ({
+                      ...prev,
+                      verifiedBy: event.target.value,
+                    }))
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                  placeholder="Optional"
+                />
+              </label>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeManualMatchModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
+                >
+                  Add match
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
       {scoreModal.isOpen ? (
         <div className="fixed inset-0 z-10 flex items-center justify-center px-4">
           <div
@@ -1377,34 +1693,6 @@ function App() {
                   </p>
                 ) : null}
               </label>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm font-medium text-slate-700">
-                  Signature
-                  <button
-                    type="button"
-                    onClick={() => signatureRef.current?.clear()}
-                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-100"
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  <SignatureCanvas
-                    ref={signatureRef}
-                    canvasProps={{
-                      className: 'h-32 w-full',
-                    }}
-                    backgroundColor="white"
-                    penColor="#111827"
-                  />
-                </div>
-                {scoreErrors.signature ? (
-                  <p className="text-xs text-red-500">
-                    {scoreErrors.signature}
-                  </p>
-                ) : null}
-              </div>
 
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
@@ -1657,7 +1945,7 @@ function App() {
           {toastMessage}
         </div>
       ) : null}
-    </div>
+    </>
   )
 }
 
