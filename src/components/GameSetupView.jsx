@@ -18,6 +18,8 @@ export default function GameSetupView({
   onStartSession,
   onEndSession,
 }) {
+  const disableClaimTheThrone = true
+  const disableRandomTeams = true
   const selectionDisabled =
     sessionStarted || isStartingSession || isEndingSession
   const selectionClasses = selectionDisabled ? 'opacity-60' : ''
@@ -50,10 +52,14 @@ export default function GameSetupView({
           <button
             type="button"
             onClick={() => onSelectGameType('claim')}
-            disabled={selectionDisabled}
+            disabled={selectionDisabled || disableClaimTheThrone}
             className={`${baseButton} ${
               gameType === 'claim' ? activeButton : inactiveButton
-            } ${selectionDisabled ? 'cursor-not-allowed' : ''}`}
+            } ${
+              selectionDisabled || disableClaimTheThrone
+                ? 'cursor-not-allowed opacity-60'
+                : ''
+            }`}
           >
             Claim the Throne
           </button>
@@ -78,10 +84,14 @@ export default function GameSetupView({
           <button
             type="button"
             onClick={() => onSelectPlayerFormat('random')}
-            disabled={selectionDisabled}
+            disabled={selectionDisabled || disableRandomTeams}
             className={`${baseButton} ${
               playerFormat === 'random' ? activeButton : inactiveButton
-            } ${selectionDisabled ? 'cursor-not-allowed' : ''}`}
+            } ${
+              selectionDisabled || disableRandomTeams
+                ? 'cursor-not-allowed opacity-60'
+                : ''
+            }`}
           >
             Randomly generated teams
           </button>

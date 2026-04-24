@@ -16,11 +16,8 @@ import GameSetupView from './components/GameSetupView'
 import HistoryView from './components/HistoryView'
 import PlayersView from './components/PlayersView'
 import StandingsView from './components/StandingsView'
-import {
-  buildRoundFromPlayers,
-  enforceExclusivePlayers,
-  sortPlayersBySkill,
-} from './matchEngine'
+import * as roundRobinEngineDefault from './match-engines/RoundRobinDoubles.engine'
+import * as roundRobinCustomTeamsEngine from './match-engines/RoundRobinDoublesCustomTeams.engine'
 import matchEnginePlainDoc from '../docs/match-engine-plain.md?raw'
 import standingsPlainDoc from '../docs/standings-plain.md?raw'
 
@@ -28,6 +25,10 @@ const STORAGE_KEYS = {
   players: 'matchGen.players',
   matchHistory: 'matchGen.matchHistory',
   sessionStarted: 'matchGen.sessionStarted',
+  gameType: 'matchGen.gameType',
+  playerFormat: 'matchGen.playerFormat',
+  roundRobinTotalPairs: 'matchGen.roundRobinTotalPairs',
+  courtMatchups: 'matchGen.courtMatchups',
 }
 
 const defaultCourtTeams = {
@@ -54,6 +55,7 @@ const basePlayers = playersData.map((player) => {
   return {
     id: player.id,
     name: player.name,
+    teamName: player.teamName ?? '',
     rating,
     duprRating: player.duprRating ?? '',
     clubRating: player.clubRating ?? '',
@@ -121,10 +123,60 @@ const loadMatchHistory = () => {
   }
 }
 
+const loadCourtMatchups = () => {
+  if (typeof window === 'undefined') {
+    return { champions: null, battlefield: null }
+  }
+  const stored = window.localStorage.getItem(STORAGE_KEYS.courtMatchups)
+  if (!stored) return { champions: null, battlefield: null }
+  try {
+    const parsed = JSON.parse(stored)
+    if (!parsed || typeof parsed !== 'object') {
+      return { champions: null, battlefield: null }
+    }
+    return {
+      champions: parsed.champions ?? null,
+      battlefield: parsed.battlefield ?? null,
+    }
+  } catch (error) {
+    return { champions: null, battlefield: null }
+  }
+}
+
+const TEAM_ANIMALS = [
+  'Antelope',
+  'Bear',
+  'Cat',
+  'Dog',
+  'Elephant',
+  'Fox',
+  'Giraffe',
+  'Hippo',
+  'Iguana',
+  'Jaguar',
+]
+
+const getRandomTeamAnimal = () =>
+  TEAM_ANIMALS[Math.floor(Math.random() * TEAM_ANIMALS.length)]
+
 const loadSessionStarted = () => {
   if (typeof window === 'undefined') return false
   const stored = window.localStorage.getItem(STORAGE_KEYS.sessionStarted)
   return stored === 'true'
+}
+
+const loadGameType = () => {
+  if (typeof window === 'undefined') return 'round-robin'
+  const stored = window.localStorage.getItem(STORAGE_KEYS.gameType)
+  if (stored === 'claim') return 'round-robin'
+  return stored || 'round-robin'
+}
+
+const loadPlayerFormat = () => {
+  if (typeof window === 'undefined') return 'custom'
+  const stored = window.localStorage.getItem(STORAGE_KEYS.playerFormat)
+  if (stored === 'random') return 'custom'
+  return stored || 'custom'
 }
 
 const loadInitialView = () => (loadSessionStarted() ? 'courts' : 'home')
@@ -145,6 +197,114 @@ const downloadCsv = (filename, rows) => {
   URL.revokeObjectURL(url)
 }
 
+const buildCustomTeams = (players) => {
+  const teams = new Map()
+
+  players.forEach((player) => {
+    const teamName = player.teamName?.trim()
+    if (!teamName) return
+    const group = teams.get(teamName)
+    if (group) {
+      group.push(player)
+    } else {
+      teams.set(teamName, [player])
+    }
+  })
+
+  return [...teams.entries()]
+    .map(([name, members]) => ({
+      id: name,
+      name,
+      players: members.slice(0, 2),
+      gamesPlayed: members.reduce(
+        (max, player) => Math.max(max, player.gamesPlayed ?? 0),
+        0
+      ),
+    }))
+    .filter((team) => team.players.length === 2)
+}
+
+const getTeamName = (team) => team[0]?.teamName ?? team[1]?.teamName ?? ''
+
+const buildMatchKey = (teamA, teamB) =>
+  [teamA, teamB].sort((a, b) => a.localeCompare(b)).join('::')
+
+const getTeamNameFromMatch = (teamLabel, playerLookup) => {
+  if (!teamLabel) return ''
+  const players = teamLabel
+    .split('/')
+    .map((name) => name.trim())
+    .filter(Boolean)
+  if (players.length === 0) return ''
+  const teamNames = players
+    .map((name) => playerLookup.get(name))
+    .filter(Boolean)
+  if (teamNames.length === 0) return ''
+  const [first, ...rest] = teamNames
+  return rest.every((value) => value === first) ? first : ''
+}
+
+const getPlayedMatchupsFromHistory = (history = [], players = []) => {
+  const playerLookup = new Map(
+    players.map((player) => [player.name, player.teamName || ''])
+  )
+  const matchups = []
+  history.forEach((match) => {
+    const teamA =
+      match.teamAName || getTeamNameFromMatch(match.teamA, playerLookup)
+    const teamB =
+      match.teamBName || getTeamNameFromMatch(match.teamB, playerLookup)
+    if (!teamA || !teamB) return
+    const matchKey = buildMatchKey(teamA, teamB)
+    if (!matchups.includes(matchKey)) {
+      matchups.push(matchKey)
+    }
+  })
+  return matchups
+}
+
+const shuffleList = (items) => {
+  const list = [...items]
+  for (let index = list.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[list[index], list[swapIndex]] = [list[swapIndex], list[index]]
+  }
+  return list
+}
+
+const parseCsvRow = (row) => {
+  const values = []
+  let current = ''
+  let inQuotes = false
+
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index]
+    if (char === '"') {
+      if (inQuotes && row[index + 1] === '"') {
+        current += '"'
+        index += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim())
+      current = ''
+    } else {
+      current += char
+    }
+  }
+
+  values.push(current.trim())
+  return values
+}
+
+const parseCsv = (text) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parseCsvRow)
+
 function App() {
   const [players, setPlayers] = useState(loadPlayers)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -152,17 +312,14 @@ function App() {
   const [sessionStarted, setSessionStarted] = useState(loadSessionStarted)
   const [isStartingSession, setIsStartingSession] = useState(false)
   const [isEndingSession, setIsEndingSession] = useState(false)
-  const [gameType, setGameType] = useState('claim')
-  const [playerFormat, setPlayerFormat] = useState('random')
+  const [gameType, setGameType] = useState(loadGameType)
+  const [playerFormat, setPlayerFormat] = useState(loadPlayerFormat)
   const [exportMenuOpen, setExportMenuOpen] = useState(null)
   const [modalMode, setModalMode] = useState('add')
   const [editingId, setEditingId] = useState(null)
   const [infoModalOpen, setInfoModalOpen] = useState(false)
   const [infoTab, setInfoTab] = useState('match-engine-plain')
-  const [courtMatchups, setCourtMatchups] = useState({
-    champions: null,
-    battlefield: null,
-  })
+  const [courtMatchups, setCourtMatchups] = useState(loadCourtMatchups)
   const [courtStatus, setCourtStatus] = useState({
     champions: 'idle',
     battlefield: 'idle',
@@ -173,6 +330,7 @@ function App() {
   })
   const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
+    teamName: '',
     name: '',
     rating: '',
     type: 'DUPR',
@@ -208,6 +366,13 @@ function App() {
     scoreB: '',
     duplicate: '',
   })
+  const [roundRobinCompleteModalOpen, setRoundRobinCompleteModalOpen] =
+    useState(false)
+  const activeMatchEngine =
+    gameType === 'round-robin' && playerFormat === 'custom'
+      ? roundRobinCustomTeamsEngine
+      : roundRobinEngineDefault
+  const { buildRoundFromPlayers, enforceExclusivePlayers } = activeMatchEngine
   const [endSessionModal, setEndSessionModal] = useState({
     isOpen: false,
     password: '',
@@ -239,10 +404,55 @@ function App() {
     password: '',
     error: '',
   })
+  const [lastGeneratedTeams, setLastGeneratedTeams] = useState([])
+  const playedMatchups = getPlayedMatchupsFromHistory(matchHistory, players)
+  const playersTableRef = useRef(null)
   const standingsTableRef = useRef(null)
   const historyTableRef = useRef(null)
   const [toastMessage, setToastMessage] = useState('')
   const checkedInCount = players.filter((player) => player.checkedIn).length
+  const roundRobinTeams = buildCustomTeams(
+    players.filter((player) => player.checkedIn)
+  )
+  const roundRobinTeamNames = new Set(
+    roundRobinTeams.map((team) => team.name)
+  )
+  const roundRobinPlayedMatchups = playedMatchups.filter((matchKey) => {
+    const [teamA, teamB] = matchKey.split('::')
+    return roundRobinTeamNames.has(teamA) && roundRobinTeamNames.has(teamB)
+  })
+  const roundRobinTotalPairs =
+    roundRobinTeams.length > 1
+      ? (roundRobinTeams.length * (roundRobinTeams.length - 1)) / 2
+      : 0
+  const roundRobinRemainingPairs = Math.max(
+    0,
+    roundRobinTotalPairs - roundRobinPlayedMatchups.length
+  )
+
+  useEffect(() => {
+    if (
+      gameType === 'round-robin' &&
+      playerFormat === 'custom' &&
+      roundRobinTotalPairs > 0 &&
+      roundRobinRemainingPairs === 0
+    ) {
+      setRoundRobinCompleteModalOpen(true)
+    }
+  }, [
+    gameType,
+    playerFormat,
+    roundRobinTotalPairs,
+    roundRobinRemainingPairs,
+  ])
+  const teamCounts = players.reduce((counts, player) => {
+    if (!player.teamName) return counts
+    counts[player.teamName] = (counts[player.teamName] ?? 0) + 1
+    return counts
+  }, {})
+  const availableTeams = TEAM_ANIMALS.filter(
+    (animal) => (teamCounts[animal] ?? 0) < 2
+  )
   const isBattlefieldDisabled = checkedInCount < 8
   const infoContent =
     infoTab === 'match-engine-plain'
@@ -269,6 +479,32 @@ function App() {
       String(sessionStarted)
     )
   }, [sessionStarted])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEYS.gameType, gameType)
+  }, [gameType])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEYS.playerFormat, playerFormat)
+  }, [playerFormat])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.roundRobinTotalPairs,
+      String(roundRobinTotalPairs)
+    )
+  }, [roundRobinTotalPairs])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.courtMatchups,
+      JSON.stringify(courtMatchups)
+    )
+  }, [courtMatchups])
 
   useEffect(() => {
     if (!toastMessage) return
@@ -312,16 +548,21 @@ function App() {
       setCourtHolds({ champions: [], battlefield: [] })
       setRefreshCounts({ champions: 0, battlefield: 0 })
       setMatchHistory([])
+      setLastGeneratedTeams([])
       setSessionStarted(false)
       setActiveView('home')
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem(STORAGE_KEYS.players)
         window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
         window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
+        window.localStorage.removeItem(STORAGE_KEYS.gameType)
+        window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
+        window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
+        window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
       }
       setIsEndingSession(false)
       setToastMessage('Session ended')
-    }, 2000)
+    }, 1200)
   }
 
   const confirmReset = (event) => {
@@ -339,12 +580,17 @@ function App() {
     setCourtHolds({ champions: [], battlefield: [] })
     setRefreshCounts({ champions: 0, battlefield: 0 })
     setMatchHistory([])
+    setLastGeneratedTeams([])
     setSessionStarted(false)
     setActiveView('home')
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEYS.players)
       window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
       window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
+      window.localStorage.removeItem(STORAGE_KEYS.gameType)
+      window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
+    window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
+    window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
     }
     setToastMessage('Storage cleared')
     closeResetModal()
@@ -372,6 +618,7 @@ function App() {
     setModalMode('add')
     setEditingId(null)
     setFormValues({
+      teamName: availableTeams[0] ?? '',
       name: '',
       rating: '',
       type: 'DUPR',
@@ -383,6 +630,7 @@ function App() {
     setModalMode('edit')
     setEditingId(player.id)
     setFormValues({
+      teamName: player.teamName || getRandomTeamAnimal(),
       name: player.name,
       rating: String(player.rating),
       type: player.type,
@@ -406,10 +654,33 @@ function App() {
   const handleSave = (event) => {
     event.preventDefault()
     const ratingValue = formValues.rating.trim()
+    const isCustomTeams = playerFormat === 'custom'
+    const selectedTeam = formValues.teamName
+    if (isCustomTeams && modalMode === 'add') {
+      if (!selectedTeam) {
+        setToastMessage('All teams are full')
+        return
+      }
+      if ((teamCounts[selectedTeam] ?? 0) >= 2) {
+        setToastMessage('That team already has two players')
+        return
+      }
+    }
+    if (isCustomTeams && modalMode === 'edit') {
+      const currentPlayer = players.find((player) => player.id === editingId)
+      const currentTeam = currentPlayer?.teamName ?? ''
+      if (selectedTeam && selectedTeam !== currentTeam) {
+        if ((teamCounts[selectedTeam] ?? 0) >= 2) {
+          setToastMessage('That team already has two players')
+          return
+        }
+      }
+    }
 
     if (modalMode === 'add') {
       const newPlayer = {
         id: crypto.randomUUID(),
+        teamName: formValues.teamName,
         name: formValues.name.trim() || 'New Player',
         rating: ratingValue,
         duprRating: formValues.type === 'DUPR' ? ratingValue : '',
@@ -431,6 +702,7 @@ function App() {
           player.id === editingId
             ? {
                 ...player,
+                teamName: formValues.teamName,
                 name: formValues.name.trim() || player.name,
                 rating: ratingValue,
                 duprRating: formValues.type === 'DUPR' ? ratingValue : '',
@@ -516,6 +788,8 @@ function App() {
         : courtMatchups.battlefield
       )?.flatMap((team) => team.map((player) => player.id)) ?? []
     )
+    const isRoundRobinCustom =
+      gameType === 'round-robin' && playerFormat === 'custom'
     const holdIds = new Set(courtHolds[courtId] ?? [])
     const holdPlayers = (courtHolds[courtId] ?? [])
       .map((playerId) => players.find((player) => player.id === playerId))
@@ -526,8 +800,113 @@ function App() {
         !occupiedPlayers.has(player.id) &&
         !holdIds.has(player.id)
     )
-    if (holdPlayers.length + eligiblePlayers.length < 4) return
-    if (courtId === 'battlefield' && isBattlefieldDisabled) return
+    const roundRobinPlayers = isRoundRobinCustom
+      ? players.filter(
+          (player) => player.checkedIn && !occupiedPlayers.has(player.id)
+        )
+      : []
+    if (isRoundRobinCustom) {
+      if (roundRobinPlayers.length < 4) return
+      if (courtId === 'battlefield' && isBattlefieldDisabled) return
+    } else {
+      if (holdPlayers.length + eligiblePlayers.length < 4) return
+      if (courtId === 'battlefield' && isBattlefieldDisabled) return
+    }
+
+    if (isRoundRobinCustom) {
+      const candidateTeams = buildCustomTeams(roundRobinPlayers)
+      if (candidateTeams.length < 2) return
+
+      const candidateNames = candidateTeams.map((team) => team.name)
+      const candidateSet = new Set(candidateNames)
+      const playedForCandidates = playedMatchups.filter((matchKey) => {
+        const [teamA, teamB] = matchKey.split('::')
+        return candidateSet.has(teamA) && candidateSet.has(teamB)
+      })
+
+      const lastTeams = new Set(lastGeneratedTeams ?? [])
+      const preferredTeams = candidateTeams.filter(
+        (team) => !lastTeams.has(team.name)
+      )
+      const shouldAvoidRepeat = preferredTeams.length >= 2
+      const minTeamGames = candidateTeams.reduce(
+        (min, team) => Math.min(min, team.gamesPlayed),
+        Number.POSITIVE_INFINITY
+      )
+      const minGameTeams = candidateTeams.filter(
+        (team) => team.gamesPlayed === minTeamGames
+      )
+      const hasMinGamesOutsideLast = minGameTeams.some(
+        (team) => !lastTeams.has(team.name)
+      )
+
+      const orderedTeams = shuffleList(candidateTeams)
+      const availablePairs = []
+
+      for (let i = 0; i < orderedTeams.length; i += 1) {
+        for (let j = i + 1; j < orderedTeams.length; j += 1) {
+          const teamA = orderedTeams[i]
+          const teamB = orderedTeams[j]
+          const matchKey = buildMatchKey(teamA.name, teamB.name)
+          const isMatchRepeat = playedForCandidates.includes(matchKey)
+          if (isMatchRepeat) continue
+
+          const repeatsLastTeam =
+            lastTeams.has(teamA.name) || lastTeams.has(teamB.name)
+          if (hasMinGamesOutsideLast && repeatsLastTeam) continue
+          if (!hasMinGamesOutsideLast && shouldAvoidRepeat && repeatsLastTeam)
+            continue
+
+          availablePairs.push({
+            teams: [teamA, teamB],
+            totalGames: teamA.gamesPlayed + teamB.gamesPlayed,
+            maxGames: Math.max(teamA.gamesPlayed, teamB.gamesPlayed),
+          })
+        }
+      }
+
+      if (availablePairs.length === 0) {
+        setRoundRobinCompleteModalOpen(true)
+        return
+      }
+
+      const minTotalGames = availablePairs.reduce(
+        (min, pair) => Math.min(min, pair.totalGames),
+        Number.POSITIVE_INFINITY
+      )
+      const minTotalPairs = availablePairs.filter(
+        (pair) => pair.totalGames === minTotalGames
+      )
+      const minMaxGames = minTotalPairs.reduce(
+        (min, pair) => Math.min(min, pair.maxGames),
+        Number.POSITIVE_INFINITY
+      )
+      const balancedPairs = minTotalPairs.filter(
+        (pair) => pair.maxGames === minMaxGames
+      )
+      const selection = shuffleList(balancedPairs)[0]
+      const [teamA, teamB] = selection.teams
+      const selectedTeams = [teamA.players, teamB.players]
+
+      setCourtMatchups((prev) => ({
+        ...prev,
+        champions:
+          courtId === 'champions' ? selectedTeams : prev.champions,
+        battlefield:
+          courtId === 'battlefield' && !isBattlefieldDisabled
+            ? selectedTeams
+            : prev.battlefield,
+      }))
+      if (courtId === 'champions') {
+        setCourtStatus((prev) => ({ ...prev, champions: 'idle' }))
+      }
+      if (courtId === 'battlefield') {
+        setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
+      }
+      setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
+      setLastGeneratedTeams(selectedTeams.map(getTeamName).filter(Boolean))
+      return
+    }
 
     const targetSize = Math.max(0, 4 - holdPlayers.length)
     const minGames = eligiblePlayers.reduce((min, player) => {
@@ -909,18 +1288,26 @@ function App() {
         }
       })
     )
-    setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: nextHoldIds }))
+    if (gameType === 'round-robin' && playerFormat === 'custom') {
+      setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: [] }))
+    } else {
+      setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: nextHoldIds }))
+    }
 
     const teamAName = scoreModal.teamA.map((player) => player.name).join(' / ')
     const teamBName = scoreModal.teamB.map((player) => player.name).join(' / ')
     const courtLabel =
       scoreModal.courtId === 'champions' ? 'Court 1' : 'Court 2'
+    const teamAKey = getTeamName(scoreModal.teamA)
+    const teamBKey = getTeamName(scoreModal.teamB)
     setMatchHistory((prev) => [
       {
         id: crypto.randomUUID(),
         court: courtLabel,
         teamA: teamAName,
         teamB: teamBName,
+        teamAName: teamAKey,
+        teamBName: teamBKey,
         score: `${scoreA} - ${scoreB}`,
         enteredBy: scoreModal.enteredBy.trim(),
       },
@@ -957,6 +1344,86 @@ function App() {
     handleGenerateCourts(courtId, { force: true })
   }
 
+  const normalizePlayerType = (value) => {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (
+      normalized === 'self rating' ||
+      normalized === 'self-rated' ||
+      normalized === 'self'
+    ) {
+      return 'Self Rating'
+    }
+    return 'DUPR'
+  }
+
+  const handleImportPlayers = async (file) => {
+    if (!file) return
+
+    const text = await file.text()
+    const rows = parseCsv(text)
+    if (rows.length < 2) {
+      setToastMessage('No player rows found in that file')
+      return
+    }
+
+    const headers = rows[0].map((header) => header.trim().toLowerCase())
+    const findHeaderIndex = (candidates) =>
+      headers.findIndex((header) => candidates.includes(header))
+    const nameIndex = findHeaderIndex(['player', 'player name', 'name'])
+    const teamIndex = findHeaderIndex(['team name', 'team'])
+    const ratingIndex = findHeaderIndex(['rating'])
+    const typeIndex = findHeaderIndex(['type'])
+    const statusIndex = findHeaderIndex(['status'])
+
+    if (nameIndex === -1) {
+      setToastMessage('CSV must include a Player column')
+      return
+    }
+
+    const imported = rows
+      .slice(1)
+      .map((row) => {
+        const name = row[nameIndex]?.trim()
+        if (!name) return null
+
+        const teamName = teamIndex !== -1 ? row[teamIndex]?.trim() : ''
+        const rating = ratingIndex !== -1 ? row[ratingIndex]?.trim() : ''
+        const typeValue = typeIndex !== -1 ? row[typeIndex]?.trim() : ''
+        const statusValue =
+          statusIndex !== -1 ? row[statusIndex]?.trim().toLowerCase() : ''
+        const type = normalizePlayerType(typeValue)
+        const checkedIn =
+          statusValue.includes('checked in') || statusValue === 'in'
+
+        return {
+          id: crypto.randomUUID(),
+          name,
+          teamName: playerFormat === 'custom' ? teamName : '',
+          rating,
+          duprRating: type === 'DUPR' ? rating : '',
+          clubRating: type === 'Self Rating' ? rating : '',
+          type,
+          checkedIn,
+          wins: 0,
+          losses: 0,
+          winStreak: 0,
+          gamesPlayed: 0,
+          pointsFor: 0,
+          pointsAgainst: 0,
+          pointDifferential: 0,
+        }
+      })
+      .filter(Boolean)
+
+    if (imported.length === 0) {
+      setToastMessage('No valid players found in that file')
+      return
+    }
+
+    setPlayers(imported)
+    setToastMessage(`Imported ${imported.length} players`)
+  }
+
   const exportStandingsCsv = () => {
     const rows = [
       ['Rank', 'Player', 'Wins', 'Losses', 'PD', 'Games'],
@@ -978,6 +1445,26 @@ function App() {
         ]),
     ]
     downloadCsv('standings.csv', rows)
+  }
+
+  const exportPlayersCsv = () => {
+    const rows = [
+      [
+        'Player',
+        ...(playerFormat === 'custom' ? ['Team Name'] : []),
+        'Rating',
+        'Type',
+        'Status',
+      ],
+      ...players.map((player) => [
+        player.name,
+        ...(playerFormat === 'custom' ? [player.teamName || ''] : []),
+        player.rating,
+        player.type,
+        player.checkedIn ? 'Checked In' : 'Checked Out',
+      ]),
+    ]
+    downloadCsv('players.csv', rows)
   }
 
   const exportHistoryCsv = () => {
@@ -1033,6 +1520,10 @@ function App() {
 
   const exportStandingsPdf = () => {
     exportTableAsPdf('Standings', standingsTableRef, 'standings.pdf')
+  }
+
+  const exportPlayersPdf = () => {
+    exportTableAsPdf('Players', playersTableRef, 'players.pdf')
   }
 
   const exportHistoryPdf = () => {
@@ -1175,7 +1666,7 @@ function App() {
                 setSessionStarted(true)
                 setActiveView('courts')
                 setIsStartingSession(false)
-              }, 2000)
+              }, 1200)
             }}
             onEndSession={() => {
               if (isEndingSession) return
@@ -1186,8 +1677,14 @@ function App() {
           <>
             <PlayersView
               players={players}
-              onBack={() => setActiveView('courts')}
+              playerFormat={playerFormat}
               onAdd={openAddModal}
+              exportMenuOpen={exportMenuOpen}
+              setExportMenuOpen={setExportMenuOpen}
+              onExportCsv={exportPlayersCsv}
+              onExportPdf={exportPlayersPdf}
+              onImportPlayers={handleImportPlayers}
+              playersTableRef={playersTableRef}
               onCheckIn={handleCheckIn}
               onCheckOut={handleCheckOut}
               onEdit={openEditModal}
@@ -1197,12 +1694,12 @@ function App() {
         ) : activeView === 'standings' ? (
           <StandingsView
             players={players}
+            playerFormat={playerFormat}
             standingsTableRef={standingsTableRef}
             exportMenuOpen={exportMenuOpen}
             setExportMenuOpen={setExportMenuOpen}
             onExportCsv={exportStandingsCsv}
             onExportPdf={exportStandingsPdf}
-            onBack={() => setActiveView('courts')}
           />
         ) : activeView === 'history' ? (
           <HistoryView
@@ -1213,19 +1710,29 @@ function App() {
             onExportCsv={exportHistoryCsv}
             onExportPdf={exportHistoryPdf}
             onAddMatch={openManualMatchModal}
-            onBack={() => setActiveView('courts')}
           />
         ) : (
-          <CourtsView
-            courts={courts}
-            defaultCourtTeams={defaultCourtTeams}
-            courtMatchups={courtMatchups}
-            courtStatus={courtStatus}
-            isBattlefieldDisabled={isBattlefieldDisabled}
-            onGenerateCourts={handleGenerateCourts}
-            onEditCourt={openEditCourtModal}
-            onOpenScore={openScoreModal}
-          />
+          <div className="space-y-4">
+            {gameType === 'round-robin' && playerFormat === 'custom' ? (
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+                Round robin remaining matchups:{' '}
+                <span className="font-semibold text-slate-900">
+                  {roundRobinRemainingPairs}
+                </span>{' '}
+                of {roundRobinTotalPairs}
+              </div>
+            ) : null}
+            <CourtsView
+              courts={courts}
+              defaultCourtTeams={defaultCourtTeams}
+              courtMatchups={courtMatchups}
+              courtStatus={courtStatus}
+              isBattlefieldDisabled={isBattlefieldDisabled}
+              onGenerateCourts={handleGenerateCourts}
+              onEditCourt={openEditCourtModal}
+              onOpenScore={openScoreModal}
+            />
+          </div>
         )}
         {activeView === 'courts' && checkedInCount < 4 ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center px-4">
@@ -1293,6 +1800,49 @@ function App() {
             </div>
 
             <form className="mt-4 space-y-4" onSubmit={handleSave}>
+              {playerFormat === 'custom' && modalMode === 'add' ? (
+                availableTeams.length > 0 ? (
+                  <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                    Team Name
+                    <select
+                      value={formValues.teamName}
+                      onChange={(event) =>
+                        setFormValues((prev) => ({
+                          ...prev,
+                          teamName: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                    >
+                      {availableTeams.map((animal) => (
+                        <option key={animal} value={animal}>
+                          {animal}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null
+              ) : (
+                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                  Team Name
+                  <select
+                    value={formValues.teamName}
+                    onChange={(event) =>
+                      setFormValues((prev) => ({
+                        ...prev,
+                        teamName: event.target.value,
+                      }))
+                    }
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                  >
+                    {TEAM_ANIMALS.map((animal) => (
+                      <option key={animal} value={animal}>
+                        {animal}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
                 Player Name
                 <input
@@ -1309,60 +1859,64 @@ function App() {
                 />
               </label>
 
-              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Rating
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="e.g. 3.75"
-                  value={formValues.rating}
-                  onChange={(event) =>
-                    setFormValues((prev) => ({
-                      ...prev,
-                      rating: event.target.value,
-                    }))
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                />
-              </label>
+              {playerFormat === 'custom' ? null : (
+                <>
+                  <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                    Rating
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="e.g. 3.75"
+                      value={formValues.rating}
+                      onChange={(event) =>
+                        setFormValues((prev) => ({
+                          ...prev,
+                          rating: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                    />
+                  </label>
 
-              <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-slate-700">
-                  Rating Type
-                </legend>
-                <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
-                  <input
-                    type="radio"
-                    name="ratingType"
-                    value="DUPR"
-                    className="h-4 w-4 border-slate-300 text-slate-900"
-                    checked={formValues.type === 'DUPR'}
-                    onChange={(event) =>
-                      setFormValues((prev) => ({
-                        ...prev,
-                        type: event.target.value,
-                      }))
-                    }
-                  />
-                  DUPR
-                </label>
-                <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
-                  <input
-                    type="radio"
-                    name="ratingType"
-                    value="Self Rating"
-                    className="h-4 w-4 border-slate-300 text-slate-900"
-                    checked={formValues.type === 'Self Rating'}
-                    onChange={(event) =>
-                      setFormValues((prev) => ({
-                        ...prev,
-                        type: event.target.value,
-                      }))
-                    }
-                  />
-                  Self Rating
-                </label>
-              </fieldset>
+                  <fieldset className="space-y-3">
+                    <legend className="text-sm font-medium text-slate-700">
+                      Rating Type
+                    </legend>
+                    <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
+                      <input
+                        type="radio"
+                        name="ratingType"
+                        value="DUPR"
+                        className="h-4 w-4 border-slate-300 text-slate-900"
+                        checked={formValues.type === 'DUPR'}
+                        onChange={(event) =>
+                          setFormValues((prev) => ({
+                            ...prev,
+                            type: event.target.value,
+                          }))
+                        }
+                      />
+                      DUPR
+                    </label>
+                    <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
+                      <input
+                        type="radio"
+                        name="ratingType"
+                        value="Self Rating"
+                        className="h-4 w-4 border-slate-300 text-slate-900"
+                        checked={formValues.type === 'Self Rating'}
+                        onChange={(event) =>
+                          setFormValues((prev) => ({
+                            ...prev,
+                            type: event.target.value,
+                          }))
+                        }
+                      />
+                      Self Rating
+                    </label>
+                  </fieldset>
+                </>
+              )}
 
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
@@ -1380,6 +1934,43 @@ function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {roundRobinCompleteModalOpen ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/60"
+            onClick={() => setRoundRobinCompleteModalOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-lg">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Round Robin finished!
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              All teams have played each other.
+            </p>
+            <div className="mt-5 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setRoundRobinCompleteModalOpen(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoundRobinCompleteModalOpen(false)
+                  setActiveView('standings')
+                }}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+              >
+                Go to the Standings
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

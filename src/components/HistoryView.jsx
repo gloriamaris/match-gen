@@ -8,7 +8,6 @@ export default function HistoryView({
   onExportCsv,
   onExportPdf,
   onAddMatch,
-  onBack,
 }) {
   return (
     <div className="space-y-4">
@@ -59,13 +58,6 @@ export default function HistoryView({
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={onBack}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-          >
-            Back to courts
-          </button>
         </div>
       </div>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -94,7 +86,9 @@ export default function HistoryView({
                 </td>
               </tr>
             ) : (
-              matchHistory.map((match, index) => {
+              [...matchHistory]
+                .sort((a, b) => a.teamA.localeCompare(b.teamA))
+                .map((match, index) => {
                 const [scoreA, scoreB] = match.score
                   .split('-')
                   .map((value) => Number.parseInt(value.trim(), 10))
