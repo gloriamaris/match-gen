@@ -4,8 +4,6 @@ import {
   Home,
   Info,
   LayoutGrid,
-  Plus,
-  RotateCcw,
   Trophy,
   Users,
   X,
@@ -14,6 +12,7 @@ import playersData from './players.json'
 import ReactMarkdown from 'react-markdown'
 import AppLayout from './components/AppLayout'
 import CourtsView from './components/CourtsView'
+import GameSetupView from './components/GameSetupView'
 import HistoryView from './components/HistoryView'
 import PlayersView from './components/PlayersView'
 import StandingsView from './components/StandingsView'
@@ -28,6 +27,7 @@ import standingsPlainDoc from '../docs/standings-plain.md?raw'
 const STORAGE_KEYS = {
   players: 'matchGen.players',
   matchHistory: 'matchGen.matchHistory',
+  sessionStarted: 'matchGen.sessionStarted',
 }
 
 const defaultCourtTeams = {
@@ -121,6 +121,14 @@ const loadMatchHistory = () => {
   }
 }
 
+const loadSessionStarted = () => {
+  if (typeof window === 'undefined') return false
+  const stored = window.localStorage.getItem(STORAGE_KEYS.sessionStarted)
+  return stored === 'true'
+}
+
+const loadInitialView = () => (loadSessionStarted() ? 'courts' : 'home')
+
 const escapeCsvValue = (value) => {
   const text = String(value ?? '')
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
@@ -140,7 +148,12 @@ const downloadCsv = (filename, rows) => {
 function App() {
   const [players, setPlayers] = useState(loadPlayers)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [activeView, setActiveView] = useState('courts')
+  const [activeView, setActiveView] = useState(loadInitialView)
+  const [sessionStarted, setSessionStarted] = useState(loadSessionStarted)
+  const [isStartingSession, setIsStartingSession] = useState(false)
+  const [isEndingSession, setIsEndingSession] = useState(false)
+  const [gameType, setGameType] = useState('claim')
+  const [playerFormat, setPlayerFormat] = useState('random')
   const [exportMenuOpen, setExportMenuOpen] = useState(null)
   const [modalMode, setModalMode] = useState('add')
   const [editingId, setEditingId] = useState(null)
@@ -195,6 +208,11 @@ function App() {
     scoreB: '',
     duplicate: '',
   })
+  const [endSessionModal, setEndSessionModal] = useState({
+    isOpen: false,
+    password: '',
+    error: '',
+  })
   const [editCourtModal, setEditCourtModal] = useState({
     isOpen: false,
     courtId: null,
@@ -245,6 +263,14 @@ function App() {
   }, [matchHistory])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.sessionStarted,
+      String(sessionStarted)
+    )
+  }, [sessionStarted])
+
+  useEffect(() => {
     if (!toastMessage) return
     const timer = window.setTimeout(() => {
       setToastMessage('')
@@ -258,6 +284,44 @@ function App() {
 
   const closeResetModal = () => {
     setResetModal({ isOpen: false, password: '', error: '' })
+  }
+
+  const openEndSessionModal = () => {
+    setEndSessionModal({ isOpen: true, password: '', error: '' })
+  }
+
+  const closeEndSessionModal = () => {
+    setEndSessionModal({ isOpen: false, password: '', error: '' })
+  }
+
+  const confirmEndSession = (event) => {
+    event.preventDefault()
+    if (endSessionModal.password !== '123456') {
+      setEndSessionModal((prev) => ({
+        ...prev,
+        error: 'Incorrect password',
+      }))
+      return
+    }
+    setIsEndingSession(true)
+    closeEndSessionModal()
+    window.setTimeout(() => {
+      setPlayers(basePlayers)
+      setCourtMatchups({ champions: null, battlefield: null })
+      setCourtStatus({ champions: 'idle', battlefield: 'idle' })
+      setCourtHolds({ champions: [], battlefield: [] })
+      setRefreshCounts({ champions: 0, battlefield: 0 })
+      setMatchHistory([])
+      setSessionStarted(false)
+      setActiveView('home')
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(STORAGE_KEYS.players)
+        window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
+        window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
+      }
+      setIsEndingSession(false)
+      setToastMessage('Session ended')
+    }, 2000)
   }
 
   const confirmReset = (event) => {
@@ -275,10 +339,12 @@ function App() {
     setCourtHolds({ champions: [], battlefield: [] })
     setRefreshCounts({ champions: 0, battlefield: 0 })
     setMatchHistory([])
-    setActiveView('courts')
+    setSessionStarted(false)
+    setActiveView('home')
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEYS.players)
       window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
+      window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
     }
     setToastMessage('Storage cleared')
     closeResetModal()
@@ -1001,84 +1067,133 @@ function App() {
           <>
             <button
               type="button"
-              onClick={() => setActiveView('courts')}
+            onClick={() => setActiveView('home')}
               className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm transition hover:bg-blue-700"
               aria-label="Home"
               title="Home"
             >
               <Home className="h-5 w-5" aria-hidden="true" />
             </button>
-            <button
+          <button
               type="button"
               onClick={() => setActiveView('courts')}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800"
+            disabled={!sessionStarted}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition ${
+              sessionStarted
+                ? 'hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800'
+                : 'cursor-not-allowed opacity-40'
+            }`}
+            aria-label="Courts"
+            title="Courts"
             >
               <LayoutGrid className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
               type="button"
-              onClick={openAddModal}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-            >
-              <Plus className="h-5 w-5" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
               onClick={() => setActiveView('players')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-                activeView === 'players' ? 'bg-slate-100 text-slate-900' : ''
-              }`}
+            disabled={!sessionStarted}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition ${
+              activeView === 'players' ? 'bg-slate-100 text-slate-900' : ''
+            } ${
+              sessionStarted
+                ? 'hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
+                : 'cursor-not-allowed opacity-40'
+            }`}
+            aria-label="Players"
+            title="Players"
             >
               <Users className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
               type="button"
               onClick={() => setActiveView('history')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-                activeView === 'history' ? 'bg-slate-100 text-slate-900' : ''
-              }`}
+            disabled={!sessionStarted}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition ${
+              activeView === 'history' ? 'bg-slate-100 text-slate-900' : ''
+            } ${
+              sessionStarted
+                ? 'hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
+                : 'cursor-not-allowed opacity-40'
+            }`}
+            aria-label="Match history"
+            title="Match history"
             >
               <ClipboardList className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
               type="button"
               onClick={() => setActiveView('standings')}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 ${
-                activeView === 'standings' ? 'bg-slate-100 text-slate-900' : ''
-              }`}
+            disabled={!sessionStarted}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition ${
+              activeView === 'standings' ? 'bg-slate-100 text-slate-900' : ''
+            } ${
+              sessionStarted
+                ? 'hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
+                : 'cursor-not-allowed opacity-40'
+            }`}
+            aria-label="Standings"
+            title="Standings"
             >
               <Trophy className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
               type="button"
               onClick={openInfoModal}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-              aria-label="Open documentation"
+            disabled={!sessionStarted}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition ${
+              sessionStarted
+                ? 'hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900'
+                : 'cursor-not-allowed opacity-40'
+            }`}
+              aria-label="Documentation"
+              title="Documentation"
             >
               <Info className="h-5 w-5" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={handleResetData}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-            >
-              <RotateCcw className="h-5 w-5" aria-hidden="true" />
             </button>
           </>
         }
       >
         <h1 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">
-          HAPPY PICKLERS MATCH GENERATOR
+          {activeView === 'home'
+            ? 'Game Setup'
+            : 'HAPPY PICKLERS MATCH GENERATOR'}
         </h1>
-        {activeView === 'players' ? (
-          <PlayersView
-            players={players}
-            onBack={() => setActiveView('courts')}
-            onCheckIn={handleCheckIn}
-            onCheckOut={handleCheckOut}
-            onEdit={openEditModal}
-            onDelete={handleDelete}
+        {activeView === 'home' ? (
+          <GameSetupView
+            gameType={gameType}
+            playerFormat={playerFormat}
+            sessionStarted={sessionStarted}
+            isStartingSession={isStartingSession}
+            isEndingSession={isEndingSession}
+            onSelectGameType={setGameType}
+            onSelectPlayerFormat={setPlayerFormat}
+            onStartSession={() => {
+              if (isStartingSession) return
+              setIsStartingSession(true)
+              setToastMessage('Session started')
+              window.setTimeout(() => {
+                setSessionStarted(true)
+                setActiveView('courts')
+                setIsStartingSession(false)
+              }, 2000)
+            }}
+            onEndSession={() => {
+              if (isEndingSession) return
+              openEndSessionModal()
+            }}
           />
+        ) : activeView === 'players' ? (
+          <>
+            <PlayersView
+              players={players}
+              onBack={() => setActiveView('courts')}
+              onAdd={openAddModal}
+              onCheckIn={handleCheckIn}
+              onCheckOut={handleCheckOut}
+              onEdit={openEditModal}
+              onDelete={handleDelete}
+            />
+          </>
         ) : activeView === 'standings' ? (
           <StandingsView
             players={players}
@@ -1129,6 +1244,31 @@ function App() {
           </div>
         ) : null}
       </AppLayout>
+
+      {isStartingSession ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/60 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-lg">
+            <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Starting Session
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-900">
+              Preparing courts...
+            </p>
+          </div>
+        </div>
+      ) : null}
+      {isEndingSession ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/60 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-lg">
+            <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Ending Session
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-900">
+              Clearing session data...
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {isModalOpen ? (
         <div className="fixed inset-0 z-10 flex items-center justify-center px-4">
@@ -1874,6 +2014,66 @@ function App() {
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
                 >
                   Reset
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {endSessionModal.isOpen ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-slate-900/40"
+            onClick={closeEndSessionModal}
+            aria-hidden="true"
+          />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">
+                End Session
+              </h2>
+              <button
+                type="button"
+                onClick={closeEndSessionModal}
+                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Close end session modal"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <form className="mt-4 space-y-4" onSubmit={confirmEndSession}>
+              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Password
+                <input
+                  type="password"
+                  value={endSessionModal.password}
+                  onChange={(event) =>
+                    setEndSessionModal((prev) => ({
+                      ...prev,
+                      password: event.target.value,
+                      error: '',
+                    }))
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                  placeholder="Enter password"
+                />
+              </label>
+              {endSessionModal.error ? (
+                <p className="text-xs text-red-500">{endSessionModal.error}</p>
+              ) : null}
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeEndSessionModal}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700"
+                >
+                  End session
                 </button>
               </div>
             </form>

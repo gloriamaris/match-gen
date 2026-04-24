@@ -3,6 +3,7 @@ import React from 'react'
 export default function PlayersView({
   players,
   onBack,
+  onAdd,
   onCheckIn,
   onCheckOut,
   onEdit,
@@ -12,13 +13,22 @@ export default function PlayersView({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-900">Players</h2>
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-        >
-          Back to courts
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onAdd}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+          >
+            Add player
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+          >
+            Back to courts
+          </button>
+        </div>
       </div>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm text-slate-700">
