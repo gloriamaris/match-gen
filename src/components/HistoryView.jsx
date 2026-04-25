@@ -1,4 +1,5 @@
 import React from 'react'
+import { Trash2 } from 'lucide-react'
 
 export default function HistoryView({
   matchHistory,
@@ -8,6 +9,7 @@ export default function HistoryView({
   onExportCsv,
   onExportPdf,
   onAddMatch,
+  onClearHistory,
 }) {
   return (
     <div className="space-y-4">
@@ -58,6 +60,15 @@ export default function HistoryView({
               </div>
             ) : null}
           </div>
+          <button
+            type="button"
+            onClick={onClearHistory}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+            title="Clear match history"
+            aria-label="Clear match history"
+          >
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
       </div>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

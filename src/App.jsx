@@ -14,10 +14,12 @@ import AppLayout from './components/AppLayout'
 import CourtsView from './components/CourtsView'
 import GameSetupView from './components/GameSetupView'
 import HistoryView from './components/HistoryView'
+import PasswordPrompt from './components/PasswordPrompt'
 import PlayersView from './components/PlayersView'
 import StandingsView from './components/StandingsView'
 import * as roundRobinEngineDefault from './match-engines/RoundRobinDoubles.engine'
 import * as roundRobinCustomTeamsEngine from './match-engines/RoundRobinDoublesCustomTeams.engine'
+import * as splitStayRandomEngine from './match-engines/SplitStayDoublesRandom.engine'
 import matchEnginePlainDoc from '../docs/match-engine-plain.md?raw'
 import standingsPlainDoc from '../docs/standings-plain.md?raw'
 
@@ -29,6 +31,7 @@ const STORAGE_KEYS = {
   playerFormat: 'matchGen.playerFormat',
   roundRobinTotalPairs: 'matchGen.roundRobinTotalPairs',
   courtMatchups: 'matchGen.courtMatchups',
+  lastCourtTeams: 'matchGen.lastCourtTeams',
 }
 
 const defaultCourtTeams = {
@@ -56,6 +59,7 @@ const basePlayers = playersData.map((player) => {
     id: player.id,
     name: player.name,
     teamName: player.teamName ?? '',
+    gender: player.gender ?? '',
     rating,
     duprRating: player.duprRating ?? '',
     clubRating: player.clubRating ?? '',
@@ -95,6 +99,7 @@ const loadPlayers = () => {
         ...player,
         duprRating,
         clubRating,
+        gender: player.gender ?? '',
         wins: player.wins ?? 0,
         losses: player.losses ?? 0,
         winStreak: player.winStreak ?? 0,
@@ -143,6 +148,38 @@ const loadCourtMatchups = () => {
   }
 }
 
+const loadLastCourtTeams = () => {
+  if (typeof window === 'undefined') {
+    return { champions: null, battlefield: null }
+  }
+  const stored = window.localStorage.getItem(STORAGE_KEYS.lastCourtTeams)
+  if (!stored) return { champions: null, battlefield: null }
+  try {
+    const parsed = JSON.parse(stored)
+    if (!parsed || typeof parsed !== 'object') {
+      return { champions: null, battlefield: null }
+    }
+    const normalizeTeams = (teams) => {
+      if (!Array.isArray(teams)) return null
+      return teams.map((team) =>
+        Array.isArray(team)
+          ? team
+              .map((player) =>
+                typeof player === 'string' ? player : player?.id
+              )
+              .filter(Boolean)
+          : []
+      )
+    }
+    return {
+      champions: normalizeTeams(parsed.champions),
+      battlefield: normalizeTeams(parsed.battlefield),
+    }
+  } catch (error) {
+    return { champions: null, battlefield: null }
+  }
+}
+
 const TEAM_ANIMALS = [
   'Antelope',
   'Bear',
@@ -166,17 +203,15 @@ const loadSessionStarted = () => {
 }
 
 const loadGameType = () => {
-  if (typeof window === 'undefined') return 'round-robin'
+  if (typeof window === 'undefined') return 'claim'
   const stored = window.localStorage.getItem(STORAGE_KEYS.gameType)
-  if (stored === 'claim') return 'round-robin'
-  return stored || 'round-robin'
+  return stored || 'claim'
 }
 
 const loadPlayerFormat = () => {
-  if (typeof window === 'undefined') return 'custom'
+  if (typeof window === 'undefined') return 'random'
   const stored = window.localStorage.getItem(STORAGE_KEYS.playerFormat)
-  if (stored === 'random') return 'custom'
-  return stored || 'custom'
+  return stored || 'random'
 }
 
 const loadInitialView = () => (loadSessionStarted() ? 'courts' : 'home')
@@ -320,6 +355,7 @@ function App() {
   const [infoModalOpen, setInfoModalOpen] = useState(false)
   const [infoTab, setInfoTab] = useState('match-engine-plain')
   const [courtMatchups, setCourtMatchups] = useState(loadCourtMatchups)
+  const [lastCourtTeams, setLastCourtTeams] = useState(loadLastCourtTeams)
   const [courtStatus, setCourtStatus] = useState({
     champions: 'idle',
     battlefield: 'idle',
@@ -334,6 +370,7 @@ function App() {
     name: '',
     rating: '',
     type: 'DUPR',
+    gender: '',
   })
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
@@ -371,7 +408,9 @@ function App() {
   const activeMatchEngine =
     gameType === 'round-robin' && playerFormat === 'custom'
       ? roundRobinCustomTeamsEngine
-      : roundRobinEngineDefault
+      : gameType === 'claim' && playerFormat === 'random'
+        ? splitStayRandomEngine
+        : roundRobinEngineDefault
   const { buildRoundFromPlayers, enforceExclusivePlayers } = activeMatchEngine
   const [endSessionModal, setEndSessionModal] = useState({
     isOpen: false,
@@ -390,6 +429,11 @@ function App() {
     duplicate: '',
   })
   const [resetModal, setResetModal] = useState({
+    isOpen: false,
+    password: '',
+    error: '',
+  })
+  const [clearHistoryModal, setClearHistoryModal] = useState({
     isOpen: false,
     password: '',
     error: '',
@@ -453,6 +497,7 @@ function App() {
   const availableTeams = TEAM_ANIMALS.filter(
     (animal) => (teamCounts[animal] ?? 0) < 2
   )
+  const showTeamName = playerFormat === 'custom' && gameType !== 'claim'
   const isBattlefieldDisabled = checkedInCount < 8
   const infoContent =
     infoTab === 'match-engine-plain'
@@ -507,6 +552,14 @@ function App() {
   }, [courtMatchups])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.lastCourtTeams,
+      JSON.stringify(lastCourtTeams)
+    )
+  }, [lastCourtTeams])
+
+  useEffect(() => {
     if (!toastMessage) return
     const timer = window.setTimeout(() => {
       setToastMessage('')
@@ -559,6 +612,7 @@ function App() {
         window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
         window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
         window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
+        window.localStorage.removeItem(STORAGE_KEYS.lastCourtTeams)
       }
       setIsEndingSession(false)
       setToastMessage('Session ended')
@@ -591,6 +645,7 @@ function App() {
       window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
     window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
     window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
+      window.localStorage.removeItem(STORAGE_KEYS.lastCourtTeams)
     }
     setToastMessage('Storage cleared')
     closeResetModal()
@@ -622,6 +677,7 @@ function App() {
       name: '',
       rating: '',
       type: 'DUPR',
+      gender: '',
     })
     setIsModalOpen(true)
   }
@@ -634,6 +690,7 @@ function App() {
       name: player.name,
       rating: String(player.rating),
       type: player.type,
+      gender: player.gender ?? '',
     })
     setIsModalOpen(true)
   }
@@ -682,6 +739,7 @@ function App() {
         id: crypto.randomUUID(),
         teamName: formValues.teamName,
         name: formValues.name.trim() || 'New Player',
+        gender: formValues.gender,
         rating: ratingValue,
         duprRating: formValues.type === 'DUPR' ? ratingValue : '',
         clubRating: formValues.type === 'Self Rating' ? ratingValue : '',
@@ -704,6 +762,7 @@ function App() {
                 ...player,
                 teamName: formValues.teamName,
                 name: formValues.name.trim() || player.name,
+                gender: formValues.gender,
                 rating: ratingValue,
                 duprRating: formValues.type === 'DUPR' ? ratingValue : '',
                 clubRating: formValues.type === 'Self Rating' ? ratingValue : '',
@@ -965,8 +1024,158 @@ function App() {
       rotationPool.push(nextPlayer)
     }
 
-    const selectedPlayers = [...holdPlayers, ...rotationPool].slice(0, 4)
-    const round = buildRoundFromPlayers(selectedPlayers, [])
+    const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
+    let selectedPlayers = [...holdPlayers, ...rotationPool].slice(0, 4)
+    if (isSplitStayRandom) {
+      const uniqueSelected = []
+      const selectedSet = new Set()
+      selectedPlayers.forEach((player) => {
+        if (selectedSet.has(player.id)) return
+        selectedSet.add(player.id)
+        uniqueSelected.push(player)
+      })
+      if (holdPlayers.length === 2) {
+        const holdSet = new Set(holdPlayers.map((player) => player.id))
+        const partnerCandidates = uniqueSelected.filter(
+          (player) => !holdSet.has(player.id)
+        )
+        if (partnerCandidates.length < 2) {
+          const benchWinner = holdPlayers[1]
+          const keepWinner = holdPlayers[0]
+          selectedSet.delete(benchWinner.id)
+          const filtered = uniqueSelected.filter(
+            (player) => player.id !== benchWinner.id
+          )
+          uniqueSelected.length = 0
+          uniqueSelected.push(keepWinner, ...filtered.filter((player) => player.id !== keepWinner.id))
+          if (!selectedSet.has(benchWinner.id)) {
+            fallbackPool.unshift(benchWinner)
+          }
+        }
+      }
+      while (uniqueSelected.length < 4 && fallbackPool.length > 0) {
+        const nextPlayer = fallbackPool.shift()
+        if (selectedSet.has(nextPlayer.id)) continue
+        selectedSet.add(nextPlayer.id)
+        uniqueSelected.push(nextPlayer)
+      }
+      selectedPlayers = uniqueSelected
+    }
+    const existingTeams =
+      (courtMatchups[courtId] ?? []).length > 0
+        ? courtMatchups[courtId]
+        : (lastCourtTeams[courtId] ?? [])
+            .map((team) =>
+              (team ?? [])
+                .map((playerId) =>
+                  players.find((player) => player.id === playerId)
+                )
+                .filter(Boolean)
+            )
+    let round = isSplitStayRandom
+      ? (() => {
+          const lastPartners = new Map()
+          existingTeams.forEach((team) => {
+            if (!Array.isArray(team) || team.length < 2) return
+            lastPartners.set(team[0].id, team[1].id)
+            lastPartners.set(team[1].id, team[0].id)
+          })
+          if (holdPlayers.length === 2 && selectedPlayers.length >= 4) {
+            const holdSet = new Set(holdPlayers.map((player) => player.id))
+            const partners = selectedPlayers.filter(
+              (player) => !holdSet.has(player.id)
+            )
+            if (partners.length >= 2) {
+              return {
+                champions: [
+                  [holdPlayers[0], partners[0]],
+                  [holdPlayers[1], partners[1]],
+                ],
+              }
+            }
+          }
+          return buildRoundFromPlayers(selectedPlayers, [], lastPartners)
+        })()
+      : (() => {
+          const partnerHistory = new Set()
+          existingTeams.forEach((team) => {
+            if (!Array.isArray(team) || team.length < 2) return
+            partnerHistory.add(`${team[0].id}:${team[1].id}`)
+            partnerHistory.add(`${team[1].id}:${team[0].id}`)
+          })
+          return buildRoundFromPlayers(selectedPlayers, [], partnerHistory)
+        })()
+
+    if (isSplitStayRandom) {
+      const candidatePlayers = [...holdPlayers, ...rotationPool, ...fallbackPool]
+      const uniqueCandidates = []
+      const seenIds = new Set()
+      candidatePlayers.forEach((player) => {
+        if (!player || seenIds.has(player.id)) return
+        seenIds.add(player.id)
+        uniqueCandidates.push(player)
+      })
+      const getGender = (player) => (player?.gender || '').toUpperCase()
+      const pickPartner = (primary, candidates) => {
+        const primaryGender = getGender(primary)
+        if (primaryGender === 'M' || primaryGender === 'F') {
+          const opposite = primaryGender === 'M' ? 'F' : 'M'
+          const oppositeIndex = candidates.findIndex(
+            (player) => getGender(player) === opposite
+          )
+          if (oppositeIndex !== -1) {
+            return candidates.splice(oppositeIndex, 1)[0]
+          }
+        }
+        return candidates.shift()
+      }
+      if (uniqueCandidates.length >= 4) {
+        const pool = uniqueCandidates.slice(0, 4)
+        const uniqueHold = []
+        const holdIds = new Set()
+        holdPlayers.forEach((player) => {
+          if (!player || holdIds.has(player.id)) return
+          holdIds.add(player.id)
+          uniqueHold.push(player)
+        })
+        let nextTeams = null
+        if (uniqueHold.length >= 2) {
+          const others = pool.filter((player) => !holdIds.has(player.id))
+          if (others.length >= 2) {
+            const mutableOthers = [...others]
+            const firstPartner = pickPartner(uniqueHold[0], mutableOthers)
+            const secondPartner = pickPartner(uniqueHold[1], mutableOthers)
+            nextTeams = [
+              [uniqueHold[0], firstPartner],
+              [uniqueHold[1], secondPartner],
+            ]
+          }
+        } else if (uniqueHold.length === 1) {
+          const others = pool.filter((player) => !holdIds.has(player.id))
+          if (others.length >= 3) {
+            const mutableOthers = [...others]
+            const firstPartner = pickPartner(uniqueHold[0], mutableOthers)
+            nextTeams = [
+              [uniqueHold[0], firstPartner],
+              [mutableOthers[0], mutableOthers[1]],
+            ]
+          }
+        } else {
+          const mutablePool = [...pool]
+          const firstPrimary = mutablePool.shift()
+          const firstPartner = pickPartner(firstPrimary, mutablePool)
+          const secondPrimary = mutablePool.shift()
+          const secondPartner = pickPartner(secondPrimary, mutablePool)
+          nextTeams = [
+            [firstPrimary, firstPartner],
+            [secondPrimary, secondPartner],
+          ]
+        }
+        if (nextTeams) {
+          round = { champions: nextTeams }
+        }
+      }
+    }
 
     setCourtMatchups((prev) => ({
       ...prev,
@@ -1061,6 +1270,49 @@ function App() {
       scoreB: '',
       duplicate: '',
     })
+  }
+
+  const openClearHistoryModal = () => {
+    setClearHistoryModal({ isOpen: true, password: '', error: '' })
+  }
+
+  const closeClearHistoryModal = () => {
+    setClearHistoryModal({ isOpen: false, password: '', error: '' })
+  }
+
+  const confirmClearHistory = (event) => {
+    event.preventDefault()
+    if (clearHistoryModal.password !== '123456') {
+      setClearHistoryModal((prev) => ({
+        ...prev,
+        error: 'Incorrect password',
+      }))
+      return
+    }
+    setMatchHistory([])
+    setPlayers((prev) =>
+      prev.map((player) => ({
+        ...player,
+        wins: 0,
+        losses: 0,
+        winStreak: 0,
+        gamesPlayed: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+        pointDifferential: 0,
+      }))
+    )
+    setCourtMatchups({ champions: null, battlefield: null })
+    setCourtStatus({ champions: 'waiting', battlefield: 'waiting' })
+    setLastCourtTeams({ champions: null, battlefield: null })
+    setExportMenuOpen(null)
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
+      window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
+      window.localStorage.removeItem(STORAGE_KEYS.lastCourtTeams)
+    }
+    setToastMessage('Match history cleared')
+    closeClearHistoryModal()
   }
 
   const handleManualMatchSubmit = (event) => {
@@ -1245,6 +1497,7 @@ function App() {
     const maxGamesForHold = Number.isFinite(minGamesCheckedIn)
       ? minGamesCheckedIn + 1
       : Number.POSITIVE_INFINITY
+    const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
     const winnerIds = new Set(
       (isTeamAWin ? scoreModal.teamA : scoreModal.teamB).map(
         (player) => player.id
@@ -1264,8 +1517,9 @@ function App() {
         const isWinner = winnerIds.has(player.id)
         const nextWinStreak = isWinner ? (player.winStreak ?? 0) + 1 : 0
         const nextGames = gamesPlayed + 1
-        const staysOnCourt =
-          isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
+        const staysOnCourt = isSplitStayRandom
+          ? isWinner && nextWinStreak < 2
+          : isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
         const normalizedWinStreak = staysOnCourt ? nextWinStreak : 0
 
         if (staysOnCourt) {
@@ -1314,6 +1568,14 @@ function App() {
       ...prev,
     ])
 
+    setLastCourtTeams((prev) => ({
+      ...prev,
+      [scoreModal.courtId]: [
+        scoreModal.teamA.map((player) => player.id),
+        scoreModal.teamB.map((player) => player.id),
+      ],
+    }))
+
     if (scoreModal.courtId === 'champions') {
       setCourtMatchups((prev) => ({ ...prev, champions: null }))
       setCourtStatus((prev) => ({ ...prev, champions: 'waiting' }))
@@ -1356,6 +1618,13 @@ function App() {
     return 'DUPR'
   }
 
+  const normalizeGender = (value) => {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (normalized === 'm' || normalized === 'male') return 'M'
+    if (normalized === 'f' || normalized === 'female') return 'F'
+    return ''
+  }
+
   const handleImportPlayers = async (file) => {
     if (!file) return
 
@@ -1374,6 +1643,7 @@ function App() {
     const ratingIndex = findHeaderIndex(['rating'])
     const typeIndex = findHeaderIndex(['type'])
     const statusIndex = findHeaderIndex(['status'])
+    const genderIndex = findHeaderIndex(['gender', 'sex'])
 
     if (nameIndex === -1) {
       setToastMessage('CSV must include a Player column')
@@ -1389,9 +1659,11 @@ function App() {
         const teamName = teamIndex !== -1 ? row[teamIndex]?.trim() : ''
         const rating = ratingIndex !== -1 ? row[ratingIndex]?.trim() : ''
         const typeValue = typeIndex !== -1 ? row[typeIndex]?.trim() : ''
+        const genderValue = genderIndex !== -1 ? row[genderIndex]?.trim() : ''
         const statusValue =
           statusIndex !== -1 ? row[statusIndex]?.trim().toLowerCase() : ''
         const type = normalizePlayerType(typeValue)
+        const gender = normalizeGender(genderValue)
         const checkedIn =
           statusValue.includes('checked in') || statusValue === 'in'
 
@@ -1399,6 +1671,7 @@ function App() {
           id: crypto.randomUUID(),
           name,
           teamName: playerFormat === 'custom' ? teamName : '',
+          gender,
           rating,
           duprRating: type === 'DUPR' ? rating : '',
           clubRating: type === 'Self Rating' ? rating : '',
@@ -1451,14 +1724,16 @@ function App() {
     const rows = [
       [
         'Player',
-        ...(playerFormat === 'custom' ? ['Team Name'] : []),
+        'Gender',
+        ...(showTeamName ? ['Team Name'] : []),
         'Rating',
         'Type',
         'Status',
       ],
       ...players.map((player) => [
         player.name,
-        ...(playerFormat === 'custom' ? [player.teamName || ''] : []),
+        player.gender || '',
+        ...(showTeamName ? [player.teamName || ''] : []),
         player.rating,
         player.type,
         player.checkedIn ? 'Checked In' : 'Checked Out',
@@ -1656,7 +1931,15 @@ function App() {
             sessionStarted={sessionStarted}
             isStartingSession={isStartingSession}
             isEndingSession={isEndingSession}
-            onSelectGameType={setGameType}
+            onSelectGameType={(nextGameType) => {
+              setGameType(nextGameType)
+              if (nextGameType === 'claim') {
+                setPlayerFormat('random')
+              }
+              if (nextGameType === 'round-robin') {
+                setPlayerFormat('custom')
+              }
+            }}
             onSelectPlayerFormat={setPlayerFormat}
             onStartSession={() => {
               if (isStartingSession) return
@@ -1678,6 +1961,7 @@ function App() {
             <PlayersView
               players={players}
               playerFormat={playerFormat}
+              gameType={gameType}
               onAdd={openAddModal}
               exportMenuOpen={exportMenuOpen}
               setExportMenuOpen={setExportMenuOpen}
@@ -1710,6 +1994,7 @@ function App() {
             onExportCsv={exportHistoryCsv}
             onExportPdf={exportHistoryPdf}
             onAddMatch={openManualMatchModal}
+            onClearHistory={openClearHistoryModal}
           />
         ) : (
           <div className="space-y-4">
@@ -1800,8 +2085,30 @@ function App() {
             </div>
 
             <form className="mt-4 space-y-4" onSubmit={handleSave}>
-              {playerFormat === 'custom' && modalMode === 'add' ? (
-                availableTeams.length > 0 ? (
+              {showTeamName ? (
+                modalMode === 'add' ? (
+                  availableTeams.length > 0 ? (
+                    <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                      Team Name
+                      <select
+                        value={formValues.teamName}
+                        onChange={(event) =>
+                          setFormValues((prev) => ({
+                            ...prev,
+                            teamName: event.target.value,
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                      >
+                        {availableTeams.map((animal) => (
+                          <option key={animal} value={animal}>
+                            {animal}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null
+                ) : (
                   <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
                     Team Name
                     <select
@@ -1814,35 +2121,15 @@ function App() {
                       }
                       className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                     >
-                      {availableTeams.map((animal) => (
+                      {TEAM_ANIMALS.map((animal) => (
                         <option key={animal} value={animal}>
                           {animal}
                         </option>
                       ))}
                     </select>
                   </label>
-                ) : null
-              ) : (
-                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                  Team Name
-                  <select
-                    value={formValues.teamName}
-                    onChange={(event) =>
-                      setFormValues((prev) => ({
-                        ...prev,
-                        teamName: event.target.value,
-                      }))
-                    }
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  >
-                    {TEAM_ANIMALS.map((animal) => (
-                      <option key={animal} value={animal}>
-                        {animal}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+                )
+              ) : null}
               <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
                 Player Name
                 <input
@@ -1857,6 +2144,23 @@ function App() {
                   }
                   className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                 />
+              </label>
+              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                Gender
+                <select
+                  value={formValues.gender}
+                  onChange={(event) =>
+                    setFormValues((prev) => ({
+                      ...prev,
+                      gender: event.target.value,
+                    }))
+                  }
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                >
+                  <option value="">Select gender</option>
+                  <option value="M">Male</option>
+                  <option value="F">Female</option>
+                </select>
               </label>
 
               {playerFormat === 'custom' ? null : (
@@ -2244,9 +2548,7 @@ function App() {
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
                   Score A
-                  <input
-                    type="number"
-                    min="0"
+                  <select
                     value={manualMatchModal.scoreA}
                     onChange={(event) =>
                       setManualMatchModal((prev) => ({
@@ -2255,8 +2557,16 @@ function App() {
                       }))
                     }
                     className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                    placeholder="0"
-                  />
+                  >
+                    <option value="">Select score</option>
+                    {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                      (score) => (
+                        <option key={score} value={score}>
+                          {score}
+                        </option>
+                      )
+                    )}
+                  </select>
                   {manualMatchErrors.scoreA ? (
                     <p className="text-xs text-red-500">
                       {manualMatchErrors.scoreA}
@@ -2265,9 +2575,7 @@ function App() {
                 </label>
                 <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
                   Score B
-                  <input
-                    type="number"
-                    min="0"
+                  <select
                     value={manualMatchModal.scoreB}
                     onChange={(event) =>
                       setManualMatchModal((prev) => ({
@@ -2276,8 +2584,16 @@ function App() {
                       }))
                     }
                     className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                    placeholder="0"
-                  />
+                  >
+                    <option value="">Select score</option>
+                    {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                      (score) => (
+                        <option key={score} value={score}>
+                          {score}
+                        </option>
+                      )
+                    )}
+                  </select>
                   {manualMatchErrors.scoreB ? (
                     <p className="text-xs text-red-500">
                       {manualMatchErrors.scoreB}
@@ -2352,9 +2668,7 @@ function App() {
                 <p className="text-sm font-medium text-slate-800">
                   {scoreModal.teamA.map((player) => player.name).join(' / ')}
                 </p>
-                <input
-                  type="number"
-                  min="0"
+                <select
                   value={scoreModal.scoreA}
                   onChange={(event) =>
                     setScoreModal((prev) => ({
@@ -2363,8 +2677,16 @@ function App() {
                     }))
                   }
                   className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  placeholder="Team A score"
-                />
+                >
+                  <option value="">Select score</option>
+                  {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                    (score) => (
+                      <option key={score} value={score}>
+                        {score}
+                      </option>
+                    )
+                  )}
+                </select>
                 {scoreErrors.scoreA ? (
                   <p className="text-xs text-red-500">{scoreErrors.scoreA}</p>
                 ) : null}
@@ -2377,9 +2699,7 @@ function App() {
                 <p className="text-sm font-medium text-slate-800">
                   {scoreModal.teamB.map((player) => player.name).join(' / ')}
                 </p>
-                <input
-                  type="number"
-                  min="0"
+                <select
                   value={scoreModal.scoreB}
                   onChange={(event) =>
                     setScoreModal((prev) => ({
@@ -2388,8 +2708,16 @@ function App() {
                     }))
                   }
                   className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  placeholder="Team B score"
-                />
+                >
+                  <option value="">Select score</option>
+                  {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                    (score) => (
+                      <option key={score} value={score}>
+                        {score}
+                      </option>
+                    )
+                  )}
+                </select>
                 {scoreErrors.scoreB ? (
                   <p className="text-xs text-red-500">{scoreErrors.scoreB}</p>
                 ) : null}
@@ -2551,186 +2879,76 @@ function App() {
           </div>
         </div>
       ) : null}
-      {resetModal.isOpen ? (
-        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
-          <div
-            className="absolute inset-0 bg-slate-900/40"
-            onClick={closeResetModal}
-            aria-hidden="true"
-          />
-          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">
-                Confirm Reset
-              </h2>
-              <button
-                type="button"
-                onClick={closeResetModal}
-                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                aria-label="Close reset modal"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-            <form className="mt-4 space-y-4" onSubmit={confirmReset}>
-              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Password
-                <input
-                  type="password"
-                  value={resetModal.password}
-                  onChange={(event) =>
-                    setResetModal((prev) => ({
-                      ...prev,
-                      password: event.target.value,
-                      error: '',
-                    }))
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  placeholder="Enter password"
-                />
-              </label>
-              {resetModal.error ? (
-                <p className="text-xs text-red-500">{resetModal.error}</p>
-              ) : null}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeResetModal}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
-                >
-                  Reset
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
-      {endSessionModal.isOpen ? (
-        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
-          <div
-            className="absolute inset-0 bg-slate-900/40"
-            onClick={closeEndSessionModal}
-            aria-hidden="true"
-          />
-          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">
-                End Session
-              </h2>
-              <button
-                type="button"
-                onClick={closeEndSessionModal}
-                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                aria-label="Close end session modal"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-            <form className="mt-4 space-y-4" onSubmit={confirmEndSession}>
-              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Password
-                <input
-                  type="password"
-                  value={endSessionModal.password}
-                  onChange={(event) =>
-                    setEndSessionModal((prev) => ({
-                      ...prev,
-                      password: event.target.value,
-                      error: '',
-                    }))
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  placeholder="Enter password"
-                />
-              </label>
-              {endSessionModal.error ? (
-                <p className="text-xs text-red-500">{endSessionModal.error}</p>
-              ) : null}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeEndSessionModal}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700"
-                >
-                  End session
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
-      {refreshModal.isOpen ? (
-        <div className="fixed inset-0 z-20 flex items-center justify-center px-4">
-          <div
-            className="absolute inset-0 bg-slate-900/40"
-            onClick={closeRefreshModal}
-            aria-hidden="true"
-          />
-          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">
-                Refresh Court
-              </h2>
-              <button
-                type="button"
-                onClick={closeRefreshModal}
-                className="rounded-full border border-slate-200 p-1.5 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                aria-label="Close refresh modal"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-            <form className="mt-4 space-y-4" onSubmit={confirmRefresh}>
-              <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Password
-                <input
-                  type="password"
-                  value={refreshModal.password}
-                  onChange={(event) =>
-                    setRefreshModal((prev) => ({
-                      ...prev,
-                      password: event.target.value,
-                      error: '',
-                    }))
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
-                  placeholder="Enter password"
-                />
-              </label>
-              {refreshModal.error ? (
-                <p className="text-xs text-red-500">{refreshModal.error}</p>
-              ) : null}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeRefreshModal}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
-                >
-                  Confirm
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
+      <PasswordPrompt
+        isOpen={resetModal.isOpen}
+        title="Confirm Reset"
+        confirmLabel="Reset"
+        onClose={closeResetModal}
+        onSubmit={confirmReset}
+        password={resetModal.password}
+        onPasswordChange={(event) =>
+          setResetModal((prev) => ({
+            ...prev,
+            password: event.target.value,
+            error: '',
+          }))
+        }
+        error={resetModal.error}
+        closeAriaLabel="Close reset modal"
+      />
+      <PasswordPrompt
+        isOpen={endSessionModal.isOpen}
+        title="End Session"
+        confirmLabel="End session"
+        isDanger
+        onClose={closeEndSessionModal}
+        onSubmit={confirmEndSession}
+        password={endSessionModal.password}
+        onPasswordChange={(event) =>
+          setEndSessionModal((prev) => ({
+            ...prev,
+            password: event.target.value,
+            error: '',
+          }))
+        }
+        error={endSessionModal.error}
+        closeAriaLabel="Close end session modal"
+      />
+      <PasswordPrompt
+        isOpen={refreshModal.isOpen}
+        title="Refresh Court"
+        confirmLabel="Confirm"
+        onClose={closeRefreshModal}
+        onSubmit={confirmRefresh}
+        password={refreshModal.password}
+        onPasswordChange={(event) =>
+          setRefreshModal((prev) => ({
+            ...prev,
+            password: event.target.value,
+            error: '',
+          }))
+        }
+        error={refreshModal.error}
+        closeAriaLabel="Close refresh modal"
+      />
+      <PasswordPrompt
+        isOpen={clearHistoryModal.isOpen}
+        title="Clear Match History"
+        confirmLabel="Clear history"
+        isDanger
+        onClose={closeClearHistoryModal}
+        onSubmit={confirmClearHistory}
+        password={clearHistoryModal.password}
+        onPasswordChange={(event) =>
+          setClearHistoryModal((prev) => ({
+            ...prev,
+            password: event.target.value,
+            error: '',
+          }))
+        }
+        error={clearHistoryModal.error}
+        closeAriaLabel="Close clear history modal"
+      />
       {toastMessage ? (
         <div className="fixed bottom-6 right-6 z-20 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg">
           {toastMessage}

@@ -3,6 +3,7 @@ import React, { useRef } from 'react'
 export default function PlayersView({
   players,
   playerFormat,
+  gameType,
   onAdd,
   exportMenuOpen,
   setExportMenuOpen,
@@ -16,6 +17,8 @@ export default function PlayersView({
   onDelete,
 }) {
   const importInputRef = useRef(null)
+  const showTeamName = playerFormat === 'custom' && gameType !== 'claim'
+  const showRatings = !showTeamName
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -94,15 +97,16 @@ export default function PlayersView({
             <tr>
               <th className="px-4 py-3">#</th>
               <th className="px-4 py-3">Player Name</th>
-              {playerFormat === 'custom' ? (
+              <th className="px-4 py-3">Gender</th>
+              {showTeamName ? (
                 <th className="px-4 py-3">Team Name</th>
               ) : null}
-              {playerFormat === 'custom' ? null : (
+              {showRatings ? (
                 <>
                   <th className="px-4 py-3">Rating</th>
                   <th className="px-4 py-3">Type</th>
                 </>
-              )}
+              ) : null}
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Action</th>
             </tr>
@@ -112,7 +116,7 @@ export default function PlayersView({
               <tr>
                 <td
                   className="px-4 py-6 text-center text-sm text-slate-500"
-                  colSpan={playerFormat === 'custom' ? 7 : 6}
+                  colSpan={showTeamName ? 8 : 7}
                 >
                   No players added yet.
                 </td>
@@ -124,17 +128,20 @@ export default function PlayersView({
                   <td className="px-4 py-3 font-medium text-slate-800">
                     {player.name}
                   </td>
-                  {playerFormat === 'custom' ? (
+                  <td className="px-4 py-3 text-slate-600">
+                    {player.gender || '—'}
+                  </td>
+                  {showTeamName ? (
                     <td className="px-4 py-3 text-slate-600">
                       {player.teamName || '—'}
                     </td>
                   ) : null}
-                  {playerFormat === 'custom' ? null : (
+                  {showRatings ? (
                     <>
                       <td className="px-4 py-3">{player.rating}</td>
                       <td className="px-4 py-3">{player.type}</td>
                     </>
-                  )}
+                  ) : null}
                   <td className="px-4 py-3">
                     {player.checkedIn ? (
                       <div className="flex flex-wrap items-center gap-2">

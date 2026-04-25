@@ -18,8 +18,9 @@ export default function GameSetupView({
   onStartSession,
   onEndSession,
 }) {
-  const disableClaimTheThrone = true
-  const disableRandomTeams = true
+  const disableClaimTheThrone = false
+  const disableRandomTeams = gameType === 'round-robin'
+  const disableCustomTeams = gameType === 'claim'
   const selectionDisabled =
     sessionStarted || isStartingSession || isEndingSession
   const selectionClasses = selectionDisabled ? 'opacity-60' : ''
@@ -61,7 +62,7 @@ export default function GameSetupView({
                 : ''
             }`}
           >
-            Claim the Throne
+            Split & Stay
           </button>
           <button
             type="button"
@@ -98,10 +99,12 @@ export default function GameSetupView({
           <button
             type="button"
             onClick={() => onSelectPlayerFormat('custom')}
-            disabled={selectionDisabled}
+            disabled={selectionDisabled || disableCustomTeams}
             className={`${baseButton} ${
               playerFormat === 'custom' ? activeButton : inactiveButton
-            } ${selectionDisabled ? 'cursor-not-allowed' : ''}`}
+            } ${
+              selectionDisabled || disableCustomTeams ? 'cursor-not-allowed' : ''
+            }`}
           >
             Custom teams
           </button>
