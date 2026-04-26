@@ -77,6 +77,7 @@ const basePlayers = playersData.map((player) => {
 })
 
 const ADMIN_STANDBY_IDS = new Set(['player-1', 'player-4'])
+const PARTNER_MEMORY_ROUNDS = 2
 
 const loadPlayers = () => {
   if (typeof window === 'undefined') return basePlayers
@@ -305,6 +306,52 @@ const shuffleList = (items) => {
     ;[list[index], list[swapIndex]] = [list[swapIndex], list[index]]
   }
   return list
+}
+
+const buildPartnerKey = (firstId, secondId) => {
+  if (!firstId || !secondId) return ''
+  return [firstId, secondId].sort((a, b) => a.localeCompare(b)).join('::')
+}
+
+const getTeamPlayerIdsFromLabel = (teamLabel, playerIdLookupByName) => {
+  if (!teamLabel) return []
+  return teamLabel
+    .split('/')
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => playerIdLookupByName.get(name))
+    .filter(Boolean)
+}
+
+const getRecentPartnerHistory = (
+  history = [],
+  players = [],
+  courtLabel,
+  windowSize = PARTNER_MEMORY_ROUNDS
+) => {
+  if (!courtLabel || windowSize <= 0) return new Set()
+  const playerIdLookupByName = new Map(players.map((player) => [player.name, player.id]))
+  const recentPairs = new Set()
+  let roundsCounted = 0
+
+  for (let index = 0; index < history.length; index += 1) {
+    const match = history[index]
+    if (!match || match.court !== courtLabel) continue
+    const teamAIds = getTeamPlayerIdsFromLabel(match.teamA, playerIdLookupByName)
+    const teamBIds = getTeamPlayerIdsFromLabel(match.teamB, playerIdLookupByName)
+    const teams = [teamAIds, teamBIds]
+
+    teams.forEach((teamIds) => {
+      if (teamIds.length < 2) return
+      const partnerKey = buildPartnerKey(teamIds[0], teamIds[1])
+      if (partnerKey) recentPairs.add(partnerKey)
+    })
+
+    roundsCounted += 1
+    if (roundsCounted >= windowSize) break
+  }
+
+  return recentPairs
 }
 
 const parseCsvRow = (row) => {
@@ -1072,6 +1119,7 @@ function App() {
                 )
                 .filter(Boolean)
             )
+    const courtLabel = courtId === 'champions' ? 'Court 1' : 'Court 2'
     let round = isSplitStayRandom
       ? (() => {
           const lastPartners = new Map()
@@ -1116,18 +1164,12 @@ function App() {
         uniqueCandidates.push(player)
       })
       const getGender = (player) => (player?.gender || '').toUpperCase()
-      const pickPartner = (primary, candidates) => {
-        const primaryGender = getGender(primary)
-        if (primaryGender === 'M' || primaryGender === 'F') {
-          const opposite = primaryGender === 'M' ? 'F' : 'M'
-          const oppositeIndex = candidates.findIndex(
-            (player) => getGender(player) === opposite
-          )
-          if (oppositeIndex !== -1) {
-            return candidates.splice(oppositeIndex, 1)[0]
-          }
-        }
-        return candidates.shift()
+      const getGenderPenalty = (team) => {
+        if (!Array.isArray(team) || team.length < 2) return 1
+        const genderA = getGender(team[0])
+        const genderB = getGender(team[1])
+        if (!genderA || !genderB) return 0
+        return genderA === genderB ? 1 : 0
       }
       if (uniqueCandidates.length >= 4) {
         const pool = uniqueCandidates.slice(0, 4)
@@ -1138,41 +1180,94 @@ function App() {
           holdIds.add(player.id)
           uniqueHold.push(player)
         })
-        let nextTeams = null
+        const recentPartnerKeys = getRecentPartnerHistory(
+          matchHistory,
+          players,
+          courtLabel,
+          PARTNER_MEMORY_ROUNDS
+        )
+        existingTeams.forEach((team) => {
+          if (!Array.isArray(team) || team.length < 2) return
+          const partnerKey = buildPartnerKey(team[0]?.id, team[1]?.id)
+          if (partnerKey) recentPartnerKeys.add(partnerKey)
+        })
+        const candidatePairings = []
+        const addPairing = (teamA, teamB) => {
+          if (!teamA || !teamB) return
+          if (teamA.length < 2 || teamB.length < 2) return
+          const isDuplicateWithinTeam =
+            teamA[0].id === teamA[1].id || teamB[0].id === teamB[1].id
+          const usedIds = new Set([...teamA, ...teamB].map((player) => player.id))
+          if (isDuplicateWithinTeam || usedIds.size < 4) return
+          const teamAKey = buildPartnerKey(teamA[0].id, teamA[1].id)
+          const teamBKey = buildPartnerKey(teamB[0].id, teamB[1].id)
+          const repeatCount =
+            (recentPartnerKeys.has(teamAKey) ? 1 : 0) +
+            (recentPartnerKeys.has(teamBKey) ? 1 : 0)
+          const genderPenalty = getGenderPenalty(teamA) + getGenderPenalty(teamB)
+          candidatePairings.push({
+            teams: [teamA, teamB],
+            repeatCount,
+            genderPenalty,
+          })
+        }
+
         if (uniqueHold.length >= 2) {
           const others = pool.filter((player) => !holdIds.has(player.id))
           if (others.length >= 2) {
-            const mutableOthers = [...others]
-            const firstPartner = pickPartner(uniqueHold[0], mutableOthers)
-            const secondPartner = pickPartner(uniqueHold[1], mutableOthers)
-            nextTeams = [
-              [uniqueHold[0], firstPartner],
-              [uniqueHold[1], secondPartner],
-            ]
+            addPairing(
+              [uniqueHold[0], others[0]],
+              [uniqueHold[1], others[1]]
+            )
+            addPairing(
+              [uniqueHold[0], others[1]],
+              [uniqueHold[1], others[0]]
+            )
           }
         } else if (uniqueHold.length === 1) {
           const others = pool.filter((player) => !holdIds.has(player.id))
           if (others.length >= 3) {
-            const mutableOthers = [...others]
-            const firstPartner = pickPartner(uniqueHold[0], mutableOthers)
-            nextTeams = [
-              [uniqueHold[0], firstPartner],
-              [mutableOthers[0], mutableOthers[1]],
-            ]
+            addPairing(
+              [uniqueHold[0], others[0]],
+              [others[1], others[2]]
+            )
+            addPairing(
+              [uniqueHold[0], others[1]],
+              [others[0], others[2]]
+            )
+            addPairing(
+              [uniqueHold[0], others[2]],
+              [others[0], others[1]]
+            )
           }
         } else {
-          const mutablePool = [...pool]
-          const firstPrimary = mutablePool.shift()
-          const firstPartner = pickPartner(firstPrimary, mutablePool)
-          const secondPrimary = mutablePool.shift()
-          const secondPartner = pickPartner(secondPrimary, mutablePool)
-          nextTeams = [
-            [firstPrimary, firstPartner],
-            [secondPrimary, secondPartner],
-          ]
+          addPairing([pool[0], pool[1]], [pool[2], pool[3]])
+          addPairing([pool[0], pool[2]], [pool[1], pool[3]])
+          addPairing([pool[0], pool[3]], [pool[1], pool[2]])
         }
-        if (nextTeams) {
-          round = { champions: nextTeams }
+        if (candidatePairings.length > 0) {
+          const minRepeatCount = candidatePairings.reduce(
+            (min, pairing) => Math.min(min, pairing.repeatCount),
+            Number.POSITIVE_INFINITY
+          )
+          const antiRepeatCandidates = candidatePairings.filter(
+            (pairing) => pairing.repeatCount === minRepeatCount
+          )
+          const minGenderPenalty = antiRepeatCandidates.reduce(
+            (min, pairing) => Math.min(min, pairing.genderPenalty),
+            Number.POSITIVE_INFINITY
+          )
+          const balancedCandidates = antiRepeatCandidates.filter(
+            (pairing) => pairing.genderPenalty === minGenderPenalty
+          )
+          const selectedPairing =
+            shuffleList(balancedCandidates)[0] ?? shuffleList(candidatePairings)[0]
+          round = { champions: selectedPairing.teams }
+          if (minRepeatCount > 0) {
+            setToastMessage(
+              `No fully fresh partners in last ${PARTNER_MEMORY_ROUNDS} rounds. Using least-repeat fallback.`
+            )
+          }
         }
       }
     }
