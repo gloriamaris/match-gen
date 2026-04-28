@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { toJpeg, toPng } from 'html-to-image'
 import {
   ClipboardList,
   Home,
@@ -16,6 +17,7 @@ import GameSetupView from './components/GameSetupView'
 import HistoryView from './components/HistoryView'
 import PasswordPrompt from './components/PasswordPrompt'
 import PlayersView from './components/PlayersView'
+import ShareStandingsModal from './components/ShareStandingsModal'
 import StandingsView from './components/StandingsView'
 import * as roundRobinEngineDefault from './match-engines/RoundRobinDoubles.engine'
 import * as roundRobinCustomTeamsEngine from './match-engines/RoundRobinDoublesCustomTeams.engine'
@@ -32,7 +34,19 @@ const STORAGE_KEYS = {
   roundRobinTotalPairs: 'matchGen.roundRobinTotalPairs',
   courtMatchups: 'matchGen.courtMatchups',
   lastCourtTeams: 'matchGen.lastCourtTeams',
+  shareCoverPhoto: 'matchGen.shareCoverPhoto',
+  sharePrimaryPhoto: 'matchGen.sharePrimaryPhoto',
+  shareCoverPhotoName: 'matchGen.shareCoverPhotoName',
+  sharePrimaryPhotoName: 'matchGen.sharePrimaryPhotoName',
+  shareEventDate: 'matchGen.shareEventDate',
 }
+
+const DEFAULT_SHARE_COVER_PHOTO = '/img/cover-photo.jpg'
+const DEFAULT_SHARE_PRIMARY_PHOTO = '/img/primary-photo.jpg'
+const DEFAULT_SHARE_COVER_PHOTO_NAME = 'cover-photo.jpg'
+const DEFAULT_SHARE_PRIMARY_PHOTO_NAME = 'primary-photo.jpg'
+const DEFAULT_SHARE_EVENT_NAME = 'Event Name'
+const DEFAULT_SHARE_EVENT_DATE = ''
 
 const defaultCourtTeams = {
   champions: ['Player 1 / Player 2', 'Player 3 / Player 4'],
@@ -216,6 +230,24 @@ const loadPlayerFormat = () => {
 }
 
 const loadInitialView = () => (loadSessionStarted() ? 'courts' : 'home')
+
+const loadSharePhoto = (storageKey, fallbackPath) => {
+  if (typeof window === 'undefined') return fallbackPath
+  const stored = window.localStorage.getItem(storageKey)
+  return stored || fallbackPath
+}
+
+const loadSharePhotoName = (storageKey, fallbackName) => {
+  if (typeof window === 'undefined') return fallbackName
+  const stored = window.localStorage.getItem(storageKey)
+  return stored || fallbackName
+}
+
+const loadShareValue = (storageKey, fallbackValue) => {
+  if (typeof window === 'undefined') return fallbackValue
+  const stored = window.localStorage.getItem(storageKey)
+  return stored ?? fallbackValue
+}
 
 const escapeCsvValue = (value) => {
   const text = String(value ?? '')
@@ -495,6 +527,29 @@ function App() {
     password: '',
     error: '',
   })
+  const [shareModalOpen, setShareModalOpen] = useState(false)
+  const [shareEventName, setShareEventName] = useState(DEFAULT_SHARE_EVENT_NAME)
+  const [shareEventDate, setShareEventDate] = useState(() =>
+    loadShareValue(STORAGE_KEYS.shareEventDate, DEFAULT_SHARE_EVENT_DATE)
+  )
+  const [shareCoverPhotoSrc, setShareCoverPhotoSrc] = useState(() =>
+    loadSharePhoto(STORAGE_KEYS.shareCoverPhoto, DEFAULT_SHARE_COVER_PHOTO)
+  )
+  const [sharePrimaryPhotoSrc, setSharePrimaryPhotoSrc] = useState(() =>
+    loadSharePhoto(STORAGE_KEYS.sharePrimaryPhoto, DEFAULT_SHARE_PRIMARY_PHOTO)
+  )
+  const [shareCoverPhotoName, setShareCoverPhotoName] = useState(() =>
+    loadSharePhotoName(
+      STORAGE_KEYS.shareCoverPhotoName,
+      DEFAULT_SHARE_COVER_PHOTO_NAME
+    )
+  )
+  const [sharePrimaryPhotoName, setSharePrimaryPhotoName] = useState(() =>
+    loadSharePhotoName(
+      STORAGE_KEYS.sharePrimaryPhotoName,
+      DEFAULT_SHARE_PRIMARY_PHOTO_NAME
+    )
+  )
   const [lastGeneratedTeams, setLastGeneratedTeams] = useState([])
   const playedMatchups = getPlayedMatchupsFromHistory(matchHistory, players)
   const playersTableRef = useRef(null)
@@ -605,6 +660,40 @@ function App() {
       JSON.stringify(lastCourtTeams)
     )
   }, [lastCourtTeams])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEYS.shareCoverPhoto, shareCoverPhotoSrc)
+  }, [shareCoverPhotoSrc])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.sharePrimaryPhoto,
+      sharePrimaryPhotoSrc
+    )
+  }, [sharePrimaryPhotoSrc])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.shareCoverPhotoName,
+      shareCoverPhotoName
+    )
+  }, [shareCoverPhotoName])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.sharePrimaryPhotoName,
+      sharePrimaryPhotoName
+    )
+  }, [sharePrimaryPhotoName])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEYS.shareEventDate, shareEventDate)
+  }, [shareEventDate])
 
   useEffect(() => {
     if (!toastMessage) return
@@ -1892,6 +1981,108 @@ function App() {
     exportTableAsPdf('Standings', standingsTableRef, 'standings.pdf')
   }
 
+  const buildSortedStandings = () =>
+    [...players].sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins
+      if (b.pointDifferential !== a.pointDifferential) {
+        return b.pointDifferential - a.pointDifferential
+      }
+      return 0
+    })
+
+  const openStandingsShareModal = () => {
+    if (players.length === 0) {
+      setToastMessage('No standings to share yet')
+      return
+    }
+    setShareModalOpen(true)
+  }
+
+  const handleShareImageUpload = (event, setImageSrc, setImageName) => {
+    const [file] = event.target.files || []
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setImageSrc(reader.result)
+        setImageName(file.name)
+      }
+    }
+    reader.readAsDataURL(file)
+    event.target.value = ''
+  }
+
+  const saveStandingsImage = async (format, node) => {
+    if (!node) {
+      setToastMessage('Unable to capture standings card')
+      return
+    }
+
+    const normalizedFormat = format === 'jpg' ? 'jpg' : 'png'
+    const baseFileName =
+      shareEventName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'standings'
+
+    let exportRoot = null
+    try {
+      const rect = node.getBoundingClientRect()
+      const exportWidth = Math.ceil(rect.width)
+      const exportHeight = Math.ceil(rect.height)
+
+      exportRoot = document.createElement('div')
+      exportRoot.style.position = 'fixed'
+      exportRoot.style.left = '-10000px'
+      exportRoot.style.top = '0'
+      exportRoot.style.margin = '0'
+      exportRoot.style.padding = '0'
+      exportRoot.style.zIndex = '-1'
+      exportRoot.style.width = `${exportWidth}px`
+      exportRoot.style.height = `${exportHeight}px`
+      exportRoot.style.overflow = 'hidden'
+      exportRoot.style.display = 'block'
+
+      const exportNode = node.cloneNode(true)
+      exportNode.style.margin = '0'
+      exportNode.style.transform = 'none'
+      exportNode.style.width = `${exportWidth}px`
+      exportNode.style.maxWidth = `${exportWidth}px`
+
+      exportRoot.appendChild(exportNode)
+      document.body.appendChild(exportRoot)
+
+      if (document.fonts?.ready) {
+        await document.fonts.ready
+      }
+
+      const options = {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: '#F4F5F0',
+        width: exportWidth,
+        height: exportHeight,
+      }
+      const dataUrl =
+        normalizedFormat === 'jpg'
+          ? await toJpeg(exportNode, { ...options, quality: 0.95 })
+          : await toPng(exportNode, options)
+
+      const link = document.createElement('a')
+      link.href = dataUrl
+      link.download = `${baseFileName}.${normalizedFormat}`
+      link.click()
+      setToastMessage(`Standings saved as ${normalizedFormat.toUpperCase()}`)
+    } catch {
+      setToastMessage('Could not save image. Try another photo or browser.')
+    } finally {
+      if (exportRoot?.parentNode) {
+        exportRoot.parentNode.removeChild(exportRoot)
+      }
+    }
+  }
+
   const exportPlayersPdf = () => {
     exportTableAsPdf('Players', playersTableRef, 'players.pdf')
   }
@@ -1900,6 +2091,7 @@ function App() {
     exportTableAsPdf('Match History', historyTableRef, 'match-history.pdf')
   }
 
+  const shareStandingsRows = buildSortedStandings()
   const sortedPlayers = [...players].sort((a, b) =>
     a.name.localeCompare(b.name)
   )
@@ -2079,6 +2271,7 @@ function App() {
             setExportMenuOpen={setExportMenuOpen}
             onExportCsv={exportStandingsCsv}
             onExportPdf={exportStandingsPdf}
+            onShare={openStandingsShareModal}
           />
         ) : activeView === 'history' ? (
           <HistoryView
@@ -2974,6 +3167,34 @@ function App() {
           </div>
         </div>
       ) : null}
+      <ShareStandingsModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        onSaveImage={saveStandingsImage}
+        standings={shareStandingsRows}
+        eventName={shareEventName}
+        onEventNameChange={(event) => setShareEventName(event.target.value)}
+        eventDate={shareEventDate}
+        onEventDateChange={(event) => setShareEventDate(event.target.value)}
+        coverPhotoSrc={shareCoverPhotoSrc}
+        primaryPhotoSrc={sharePrimaryPhotoSrc}
+        coverPhotoName={shareCoverPhotoName}
+        primaryPhotoName={sharePrimaryPhotoName}
+        onCoverPhotoUpload={(event) =>
+          handleShareImageUpload(
+            event,
+            setShareCoverPhotoSrc,
+            setShareCoverPhotoName
+          )
+        }
+        onPrimaryPhotoUpload={(event) =>
+          handleShareImageUpload(
+            event,
+            setSharePrimaryPhotoSrc,
+            setSharePrimaryPhotoName
+          )
+        }
+      />
       <PasswordPrompt
         isOpen={resetModal.isOpen}
         title="Confirm Reset"

@@ -1,4 +1,5 @@
 import React from 'react'
+import { Share2 } from 'lucide-react'
 
 export default function StandingsView({
   players,
@@ -8,6 +9,7 @@ export default function StandingsView({
   setExportMenuOpen,
   onExportCsv,
   onExportPdf,
+  onShare,
 }) {
   const showTeams = playerFormat === 'custom'
   return (
@@ -15,6 +17,15 @@ export default function StandingsView({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-slate-900">Standings</h2>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onShare}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+            title="Share standings"
+            aria-label="Share standings"
+          >
+            <Share2 className="h-4 w-4" aria-hidden="true" />
+          </button>
           <div className="relative">
             <button
               type="button"
