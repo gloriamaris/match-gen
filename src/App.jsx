@@ -292,6 +292,27 @@ const buildCustomTeams = (players) => {
     .filter((team) => team.players.length === 2)
 }
 
+const buildSortedTeamStandings = (players) =>
+  buildCustomTeams(players)
+    .map((team) => {
+      const primaryPlayer = team.players[0]
+      return {
+        ...team,
+        name: team.players.map((player) => player.name).join(' / '),
+        wins: primaryPlayer?.wins ?? 0,
+        losses: primaryPlayer?.losses ?? 0,
+        pointDifferential: primaryPlayer?.pointDifferential ?? 0,
+        gamesPlayed: primaryPlayer?.gamesPlayed ?? team.gamesPlayed ?? 0,
+      }
+    })
+    .sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins
+    if (b.pointDifferential !== a.pointDifferential) {
+      return b.pointDifferential - a.pointDifferential
+    }
+    return 0
+  })
+
 const getTeamName = (team) => team[0]?.teamName ?? team[1]?.teamName ?? ''
 
 const buildMatchKey = (teamA, teamB) =>
@@ -2092,9 +2113,13 @@ function App() {
   }
 
   const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
-  const shareStandingsRows = isSplitStayRandom
-    ? buildSortedStandings().slice(0, 10)
-    : buildSortedStandings()
+  const isRoundRobinCustomTeams =
+    gameType === 'round-robin' && playerFormat === 'custom'
+  const shareStandingsRows = isRoundRobinCustomTeams
+    ? buildSortedTeamStandings(players)
+    : isSplitStayRandom
+      ? buildSortedStandings().slice(0, 10)
+      : buildSortedStandings()
   const sortedPlayers = [...players].sort((a, b) =>
     a.name.localeCompare(b.name)
   )
@@ -3175,6 +3200,7 @@ function App() {
         onClose={() => setShareModalOpen(false)}
         onSaveImage={saveStandingsImage}
         standings={shareStandingsRows}
+        nameColumnLabel={isRoundRobinCustomTeams ? 'Player Names' : 'Player Name'}
         eventName={shareEventName}
         onEventNameChange={(event) => setShareEventName(event.target.value)}
         eventDate={shareEventDate}

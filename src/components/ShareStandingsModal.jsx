@@ -20,6 +20,7 @@ export default function ShareStandingsModal({
   onClose,
   onSaveImage,
   standings,
+  nameColumnLabel = 'Player Name',
   eventName = 'Event Name',
   onEventNameChange,
   eventDate,
@@ -117,7 +118,7 @@ export default function ShareStandingsModal({
                           Rank
                         </th>
                         <th className="w-[56%] border-r border-slate-400 px-2 py-3">
-                          Player Name
+                          {nameColumnLabel}
                         </th>
                         <th className="w-[26%] px-2 py-3 text-center">Win Rate</th>
                       </tr>
