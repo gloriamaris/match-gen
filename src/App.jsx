@@ -2091,7 +2091,10 @@ function App() {
     exportTableAsPdf('Match History', historyTableRef, 'match-history.pdf')
   }
 
-  const shareStandingsRows = buildSortedStandings()
+  const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
+  const shareStandingsRows = isSplitStayRandom
+    ? buildSortedStandings().slice(0, 10)
+    : buildSortedStandings()
   const sortedPlayers = [...players].sort((a, b) =>
     a.name.localeCompare(b.name)
   )
