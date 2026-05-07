@@ -22,6 +22,7 @@ import StandingsView from './components/StandingsView'
 import * as roundRobinEngineDefault from './match-engines/RoundRobinDoubles.engine'
 import * as roundRobinCustomTeamsEngine from './match-engines/RoundRobinDoublesCustomTeams.engine'
 import * as splitStayRandomEngine from './match-engines/SplitStayDoublesRandom.engine'
+import * as winnerLoserQueueEngine from './match-engines/WinnerLoserQueueDoubles.engine'
 import matchEnginePlainDoc from '../docs/match-engine-plain.md?raw'
 import standingsPlainDoc from '../docs/standings-plain.md?raw'
 
@@ -92,6 +93,7 @@ const basePlayers = playersData.map((player) => {
 
 const ADMIN_STANDBY_IDS = new Set(['player-1', 'player-4'])
 const PARTNER_MEMORY_ROUNDS = 2
+const OPEN_ROTATION_MAX_GAMES_GAP = 1
 
 const loadPlayers = () => {
   if (typeof window === 'undefined') return basePlayers
@@ -464,12 +466,19 @@ function App() {
     champions: [],
     battlefield: [],
   })
+  // Global cooldown for Open Rotation: players from the most recently
+  // completed match are temporarily deprioritized for the next generation
+  // on either court.
+  const [openRotationCooldownIds, setOpenRotationCooldownIds] = useState([])
   const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
     teamName: '',
     name: '',
     rating: '',
     type: 'DUPR',
+    gender: '',
+  })
+  const [formErrors, setFormErrors] = useState({
     gender: '',
   })
   const [scoreModal, setScoreModal] = useState({
@@ -505,12 +514,16 @@ function App() {
   })
   const [roundRobinCompleteModalOpen, setRoundRobinCompleteModalOpen] =
     useState(false)
+  const isOpenRotationRandom =
+    gameType === 'open-rotation' && playerFormat === 'random'
   const activeMatchEngine =
-    gameType === 'round-robin' && playerFormat === 'custom'
-      ? roundRobinCustomTeamsEngine
-      : gameType === 'claim' && playerFormat === 'random'
-        ? splitStayRandomEngine
-        : roundRobinEngineDefault
+    isOpenRotationRandom
+      ? winnerLoserQueueEngine
+      : gameType === 'round-robin' && playerFormat === 'custom'
+        ? roundRobinCustomTeamsEngine
+        : gameType === 'claim' && playerFormat === 'random'
+          ? splitStayRandomEngine
+          : roundRobinEngineDefault
   const { buildRoundFromPlayers, enforceExclusivePlayers } = activeMatchEngine
   const [endSessionModal, setEndSessionModal] = useState({
     isOpen: false,
@@ -659,6 +672,12 @@ function App() {
   }, [playerFormat])
 
   useEffect(() => {
+    if (gameType !== 'open-rotation') return
+    if (playerFormat === 'random') return
+    setPlayerFormat('random')
+  }, [gameType, playerFormat])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(
       STORAGE_KEYS.roundRobinTotalPairs,
@@ -756,6 +775,7 @@ function App() {
       setCourtMatchups({ champions: null, battlefield: null })
       setCourtStatus({ champions: 'idle', battlefield: 'idle' })
       setCourtHolds({ champions: [], battlefield: [] })
+      setOpenRotationCooldownIds([])
       setRefreshCounts({ champions: 0, battlefield: 0 })
       setMatchHistory([])
       setLastGeneratedTeams([])
@@ -789,6 +809,7 @@ function App() {
     setCourtMatchups({ champions: null, battlefield: null })
     setCourtStatus({ champions: 'idle', battlefield: 'idle' })
     setCourtHolds({ champions: [], battlefield: [] })
+    setOpenRotationCooldownIds([])
     setRefreshCounts({ champions: 0, battlefield: 0 })
     setMatchHistory([])
     setLastGeneratedTeams([])
@@ -836,6 +857,7 @@ function App() {
       type: 'DUPR',
       gender: '',
     })
+    setFormErrors({ gender: '' })
     setIsModalOpen(true)
   }
 
@@ -849,10 +871,12 @@ function App() {
       type: player.type,
       gender: player.gender ?? '',
     })
+    setFormErrors({ gender: '' })
     setIsModalOpen(true)
   }
 
   const closeModal = () => {
+    setFormErrors({ gender: '' })
     setIsModalOpen(false)
   }
 
@@ -867,6 +891,12 @@ function App() {
 
   const handleSave = (event) => {
     event.preventDefault()
+    const trimmedGender = (formValues.gender ?? '').trim()
+    if (!trimmedGender) {
+      setFormErrors({ gender: 'Gender is required' })
+      return
+    }
+    setFormErrors({ gender: '' })
     const ratingValue = formValues.rating.trim()
     const isCustomTeams = playerFormat === 'custom'
     const selectedTeam = formValues.teamName
@@ -951,6 +981,11 @@ function App() {
         return games < min ? games : min
       }, Number.POSITIVE_INFINITY)
       const normalizedGames = Number.isFinite(minGames) ? minGames : 0
+      const maxQueueOrder = prev.reduce((max, player) => {
+        const order = player.queueOrder ?? 0
+        return order > max ? order : max
+      }, 0)
+      const nextQueueOrder = maxQueueOrder + 1
 
       return prev.map((player) => {
         if (player.id !== playerId) return player
@@ -959,6 +994,7 @@ function App() {
           ...player,
           checkedIn: true,
           gamesPlayed: Math.max(currentGames, normalizedGames),
+          queueOrder: nextQueueOrder,
         }
       })
     })
@@ -1121,6 +1157,184 @@ function App() {
       }
       setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
       setLastGeneratedTeams(selectedTeams.map(getTeamName).filter(Boolean))
+      return
+    }
+
+    if (gameType === 'open-rotation') {
+      const eligibleForOpen = players.filter(
+        (player) => player.checkedIn && !occupiedPlayers.has(player.id)
+      )
+      if (eligibleForOpen.length < 4) return
+
+      const sortByOrder = (a, b) =>
+        (a.queueOrder ?? 0) - (b.queueOrder ?? 0)
+      const cooldownSet = new Set(openRotationCooldownIds)
+      const nonCooldownEligible = eligibleForOpen.filter(
+        (player) => !cooldownSet.has(player.id)
+      )
+      const selectionPool =
+        cooldownSet.size > 0 && nonCooldownEligible.length >= 4
+          ? nonCooldownEligible
+          : eligibleForOpen
+      const minGamesInSelectionPool = selectionPool.reduce((min, player) => {
+        const games = player.gamesPlayed ?? 0
+        return games < min ? games : min
+      }, Number.POSITIVE_INFINITY)
+      const maxPreferredGames = Number.isFinite(minGamesInSelectionPool)
+        ? minGamesInSelectionPool + OPEN_ROTATION_MAX_GAMES_GAP
+        : Number.POSITIVE_INFINITY
+      const withinGapPool = selectionPool.filter(
+        (player) => (player.gamesPlayed ?? 0) <= maxPreferredGames
+      )
+      const fairnessPool = withinGapPool.length >= 4 ? withinGapPool : selectionPool
+
+      // Winners = won their most recent match. Everyone else (just-lost or
+      // never-played) goes into the Losers queue, ordered by check-in time
+      // / post-match assignment so unplayed players who checked in earlier
+      // get picked before later-finishing losers.
+      const winnersQueue = fairnessPool
+        .filter(
+          (player) =>
+            (player.gamesPlayed ?? 0) > 0 && (player.winStreak ?? 0) > 0
+        )
+        .sort(sortByOrder)
+      const losersQueue = fairnessPool
+        .filter(
+          (player) =>
+            (player.gamesPlayed ?? 0) === 0 ||
+            (player.winStreak ?? 0) === 0
+        )
+        .sort(sortByOrder)
+
+      const noOneHasPlayed = fairnessPool.every(
+        (player) => (player.gamesPlayed ?? 0) === 0
+      )
+
+      let candidatePlayers
+      if (noOneHasPlayed) {
+        // Bootstrap: both queues are conceptually empty; randomize the
+        // first 4 from check-in order.
+        candidatePlayers = shuffleList(losersQueue.slice(0, 4))
+      } else {
+        const picked = winnerLoserQueueEngine.pickCourtPlayers(
+          winnersQueue,
+          losersQueue,
+          [],
+          4
+        )
+        candidatePlayers = picked.players
+      }
+
+      // If any cooled-down player still appears in the generated 4, try to
+      // replace them with a fresh player from the opposite queue first.
+      if (cooldownSet.size > 0) {
+        const isWinnerQueuePlayer = (player) =>
+          (player?.gamesPlayed ?? 0) > 0 && (player?.winStreak ?? 0) > 0
+        const findReplacement = (pool, selectedIds) =>
+          pool.find(
+            (candidate) =>
+              candidate &&
+              !selectedIds.has(candidate.id) &&
+              !cooldownSet.has(candidate.id)
+          )
+
+        const selectedIds = new Set(candidatePlayers.map((player) => player.id))
+        candidatePlayers = candidatePlayers.map((player) => {
+          if (!cooldownSet.has(player.id)) return player
+
+          selectedIds.delete(player.id)
+          const preferredPool = isWinnerQueuePlayer(player)
+            ? losersQueue
+            : winnersQueue
+          const fallbackPool = isWinnerQueuePlayer(player)
+            ? winnersQueue
+            : losersQueue
+          const replacement =
+            findReplacement(preferredPool, selectedIds) ??
+            findReplacement(fallbackPool, selectedIds)
+
+          if (replacement) {
+            selectedIds.add(replacement.id)
+            return replacement
+          }
+
+          selectedIds.add(player.id)
+          return player
+        })
+      }
+
+      let selectedPlayers = enforceExclusivePlayers(
+        candidatePlayers,
+        ADMIN_STANDBY_IDS
+      )
+
+      if (selectedPlayers.length < 4) {
+        const selectedIds = new Set(selectedPlayers.map((p) => p.id))
+        const fallback = fairnessPool
+          .filter((player) => !selectedIds.has(player.id))
+          .sort(sortByOrder)
+        while (selectedPlayers.length < 4 && fallback.length > 0) {
+          const next = fallback.shift()
+          if (!next || selectedIds.has(next.id)) continue
+          if (
+            ADMIN_STANDBY_IDS.has(next.id) &&
+            selectedPlayers.some((p) => ADMIN_STANDBY_IDS.has(p.id))
+          ) {
+            continue
+          }
+          selectedIds.add(next.id)
+          selectedPlayers.push(next)
+        }
+        if (selectedPlayers.length < 4) {
+          const overflowFallback = selectionPool
+            .filter((player) => !selectedIds.has(player.id))
+            .sort(sortByOrder)
+          while (selectedPlayers.length < 4 && overflowFallback.length > 0) {
+            const next = overflowFallback.shift()
+            if (!next || selectedIds.has(next.id)) continue
+            if (
+              ADMIN_STANDBY_IDS.has(next.id) &&
+              selectedPlayers.some((p) => ADMIN_STANDBY_IDS.has(p.id))
+            ) {
+              continue
+            }
+            selectedIds.add(next.id)
+            selectedPlayers.push(next)
+          }
+        }
+      }
+
+      if (selectedPlayers.length < 4) return
+
+      const openRotationCourtLabel =
+        courtId === 'champions' ? 'Court 1' : 'Court 2'
+      const recentPartners = getRecentPartnerHistory(
+        matchHistory,
+        players,
+        openRotationCourtLabel,
+        PARTNER_MEMORY_ROUNDS
+      )
+      const round = buildRoundFromPlayers(
+        selectedPlayers,
+        [],
+        recentPartners
+      )
+
+      setCourtMatchups((prev) => ({
+        ...prev,
+        champions: courtId === 'champions' ? round.champions : prev.champions,
+        battlefield:
+          courtId === 'battlefield' && !isBattlefieldDisabled
+            ? round.champions
+            : prev.battlefield,
+      }))
+      if (courtId === 'champions') {
+        setCourtStatus((prev) => ({ ...prev, champions: 'idle' }))
+      }
+      if (courtId === 'battlefield') {
+        setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
+      }
+      setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
       return
     }
 
@@ -1509,6 +1723,7 @@ function App() {
     )
     setCourtMatchups({ champions: null, battlefield: null })
     setCourtStatus({ champions: 'waiting', battlefield: 'waiting' })
+    setOpenRotationCooldownIds([])
     setLastCourtTeams({ champions: null, battlefield: null })
     setExportMenuOpen(null)
     if (typeof window !== 'undefined') {
@@ -1600,6 +1815,9 @@ function App() {
       },
       ...prev,
     ])
+    if (gameType === 'open-rotation') {
+      setOpenRotationCooldownIds([...teamAIds, ...teamBIds])
+    }
     setToastMessage('Match added to history')
     closeManualMatchModal()
   }
@@ -1703,12 +1921,40 @@ function App() {
       ? minGamesCheckedIn + 1
       : Number.POSITIVE_INFINITY
     const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
+    const isOpenRotation = gameType === 'open-rotation'
     const winnerIds = new Set(
       (isTeamAWin ? scoreModal.teamA : scoreModal.teamB).map(
         (player) => player.id
       )
     )
     const nextHoldIds = []
+
+    // For Open Rotation, build a queueOrder map so winners flow to the back of
+    // the Winners queue and losers flow to the back of the Losers queue with a
+    // strict, monotonic ordering (winners first across both courts in this
+    // submission, then losers).
+    let openRotationOrderMap = null
+    if (isOpenRotation) {
+      const maxQueueOrder = players.reduce((max, player) => {
+        const order = player.queueOrder ?? 0
+        return order > max ? order : max
+      }, 0)
+      openRotationOrderMap = new Map()
+      let cursor = maxQueueOrder + 1
+      const allMatchPlayers = [...scoreModal.teamA, ...scoreModal.teamB]
+      allMatchPlayers.forEach((player) => {
+        if (winnerIds.has(player.id)) {
+          openRotationOrderMap.set(player.id, cursor)
+          cursor += 1
+        }
+      })
+      allMatchPlayers.forEach((player) => {
+        if (!winnerIds.has(player.id)) {
+          openRotationOrderMap.set(player.id, cursor)
+          cursor += 1
+        }
+      })
+    }
 
     setPlayers((prev) =>
       prev.map((player) => {
@@ -1722,10 +1968,19 @@ function App() {
         const isWinner = winnerIds.has(player.id)
         const nextWinStreak = isWinner ? (player.winStreak ?? 0) + 1 : 0
         const nextGames = gamesPlayed + 1
-        const staysOnCourt = isSplitStayRandom
-          ? isWinner && nextWinStreak < 2
-          : isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
-        const normalizedWinStreak = staysOnCourt ? nextWinStreak : 0
+        const staysOnCourt = isOpenRotation
+          ? false
+          : isSplitStayRandom
+            ? isWinner && nextWinStreak < 2
+            : isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
+        // Open Rotation never stays on court but still preserves the streak
+        // value so the engine can classify the player as a winner or loser
+        // when picking from the Winners/Losers queues next round.
+        const normalizedWinStreak = isOpenRotation
+          ? nextWinStreak
+          : staysOnCourt
+            ? nextWinStreak
+            : 0
 
         if (staysOnCourt) {
           nextHoldIds.push(player.id)
@@ -1744,10 +1999,16 @@ function App() {
           pointsFor: nextPointsFor,
           pointsAgainst: nextPointsAgainst,
           pointDifferential: nextPointDifferential,
+          ...(isOpenRotation && openRotationOrderMap?.has(player.id)
+            ? { queueOrder: openRotationOrderMap.get(player.id) }
+            : {}),
         }
       })
     )
-    if (gameType === 'round-robin' && playerFormat === 'custom') {
+    if (
+      (gameType === 'round-robin' && playerFormat === 'custom') ||
+      isOpenRotation
+    ) {
       setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: [] }))
     } else {
       setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: nextHoldIds }))
@@ -1780,6 +2041,12 @@ function App() {
         scoreModal.teamB.map((player) => player.id),
       ],
     }))
+    if (isOpenRotation) {
+      setOpenRotationCooldownIds([
+        ...scoreModal.teamA.map((player) => player.id),
+        ...scoreModal.teamB.map((player) => player.id),
+      ])
+    }
 
     if (scoreModal.courtId === 'champions') {
       setCourtMatchups((prev) => ({ ...prev, champions: null }))
@@ -1855,43 +2122,71 @@ function App() {
       return
     }
 
-    const imported = rows
-      .slice(1)
-      .map((row) => {
-        const name = row[nameIndex]?.trim()
-        if (!name) return null
+    if (genderIndex === -1) {
+      setToastMessage('CSV must include a Gender column (M/F)')
+      return
+    }
 
-        const teamName = teamIndex !== -1 ? row[teamIndex]?.trim() : ''
-        const rating = ratingIndex !== -1 ? row[ratingIndex]?.trim() : ''
-        const typeValue = typeIndex !== -1 ? row[typeIndex]?.trim() : ''
-        const genderValue = genderIndex !== -1 ? row[genderIndex]?.trim() : ''
-        const statusValue =
-          statusIndex !== -1 ? row[statusIndex]?.trim().toLowerCase() : ''
-        const type = normalizePlayerType(typeValue)
-        const gender = normalizeGender(genderValue)
-        const checkedIn =
-          statusValue.includes('checked in') || statusValue === 'in'
+    const invalidGenderRows = []
+    const imported = []
+    rows.slice(1).forEach((row, rowOffset) => {
+      const name = row[nameIndex]?.trim()
+      if (!name) return
 
-        return {
-          id: crypto.randomUUID(),
-          name,
-          teamName: playerFormat === 'custom' ? teamName : '',
-          gender,
-          rating,
-          duprRating: type === 'DUPR' ? rating : '',
-          clubRating: type === 'Self Rating' ? rating : '',
-          type,
-          checkedIn,
-          wins: 0,
-          losses: 0,
-          winStreak: 0,
-          gamesPlayed: 0,
-          pointsFor: 0,
-          pointsAgainst: 0,
-          pointDifferential: 0,
-        }
+      const teamName = teamIndex !== -1 ? row[teamIndex]?.trim() : ''
+      const rating = ratingIndex !== -1 ? row[ratingIndex]?.trim() : ''
+      const typeValue = typeIndex !== -1 ? row[typeIndex]?.trim() : ''
+      const genderValue = row[genderIndex]?.trim() ?? ''
+      const statusValue =
+        statusIndex !== -1 ? row[statusIndex]?.trim().toLowerCase() : ''
+      const type = normalizePlayerType(typeValue)
+      const gender = normalizeGender(genderValue)
+      const checkedIn =
+        statusValue.includes('checked in') || statusValue === 'in'
+
+      if (!gender) {
+        // rowOffset is 0-indexed within the data rows; +2 accounts for the
+        // header row and 1-based row numbering when we surface the error.
+        invalidGenderRows.push({ rowNumber: rowOffset + 2, name })
+        return
+      }
+
+      imported.push({
+        id: crypto.randomUUID(),
+        name,
+        teamName: playerFormat === 'custom' ? teamName : '',
+        gender,
+        rating,
+        duprRating: type === 'DUPR' ? rating : '',
+        clubRating: type === 'Self Rating' ? rating : '',
+        type,
+        checkedIn,
+        wins: 0,
+        losses: 0,
+        winStreak: 0,
+        gamesPlayed: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+        pointDifferential: 0,
       })
-      .filter(Boolean)
+    })
+
+    if (invalidGenderRows.length > 0) {
+      const preview = invalidGenderRows
+        .slice(0, 3)
+        .map(({ rowNumber, name }) => `row ${rowNumber} (${name})`)
+        .join(', ')
+      const more =
+        invalidGenderRows.length > 3
+          ? ` and ${invalidGenderRows.length - 3} more`
+          : ''
+      setToastMessage(
+        `Import cancelled — ${invalidGenderRows.length} player${
+          invalidGenderRows.length === 1 ? '' : 's'
+        } missing or invalid gender (M/F): ${preview}${more}`
+      )
+      return
+    }
 
     if (imported.length === 0) {
       setToastMessage('No valid players found in that file')
@@ -2254,6 +2549,9 @@ function App() {
               if (nextGameType === 'round-robin') {
                 setPlayerFormat('custom')
               }
+              if (nextGameType === 'open-rotation') {
+                setPlayerFormat('random')
+              }
             }}
             onSelectPlayerFormat={setPlayerFormat}
             onStartSession={() => {
@@ -2462,21 +2760,34 @@ function App() {
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Gender
+                Gender <span className="text-red-500">*</span>
                 <select
+                  required
+                  aria-invalid={formErrors.gender ? 'true' : 'false'}
                   value={formValues.gender}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextGender = event.target.value
                     setFormValues((prev) => ({
                       ...prev,
-                      gender: event.target.value,
+                      gender: nextGender,
                     }))
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
+                    if (nextGender) {
+                      setFormErrors((prev) => ({ ...prev, gender: '' }))
+                    }
+                  }}
+                  className={`rounded-xl border px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400 ${
+                    formErrors.gender
+                      ? 'border-red-400'
+                      : 'border-slate-200'
+                  }`}
                 >
                   <option value="">Select gender</option>
                   <option value="M">Male</option>
                   <option value="F">Female</option>
                 </select>
+                {formErrors.gender ? (
+                  <p className="text-xs text-red-500">{formErrors.gender}</p>
+                ) : null}
               </label>
 
               {playerFormat === 'custom' ? null : (

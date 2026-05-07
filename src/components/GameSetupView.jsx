@@ -20,7 +20,8 @@ export default function GameSetupView({
 }) {
   const disableClaimTheThrone = false
   const disableRandomTeams = gameType === 'round-robin'
-  const disableCustomTeams = gameType === 'claim'
+  const disableCustomTeams =
+    gameType === 'claim' || gameType === 'open-rotation'
   const selectionDisabled =
     sessionStarted || isStartingSession || isEndingSession
   const selectionClasses = selectionDisabled ? 'opacity-60' : ''
@@ -62,7 +63,7 @@ export default function GameSetupView({
                 : ''
             }`}
           >
-            Split & Stay
+            Split & Stay (DUPR)
           </button>
           <button
             type="button"
@@ -72,7 +73,17 @@ export default function GameSetupView({
               gameType === 'round-robin' ? activeButton : inactiveButton
             } ${selectionDisabled ? 'cursor-not-allowed' : ''}`}
           >
-            Round Robin
+            Round Robin (Bagging Nights)
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectGameType('open-rotation')}
+            disabled={selectionDisabled}
+            className={`${baseButton} ${
+              gameType === 'open-rotation' ? activeButton : inactiveButton
+            } ${selectionDisabled ? 'cursor-not-allowed' : ''}`}
+          >
+            Open Rotation (Non DUPR)
           </button>
         </div>
       </section>
