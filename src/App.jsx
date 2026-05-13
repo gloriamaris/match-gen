@@ -32,6 +32,7 @@ const STORAGE_KEYS = {
   sessionStarted: 'matchGen.sessionStarted',
   gameType: 'matchGen.gameType',
   playerFormat: 'matchGen.playerFormat',
+  numberOfCourts: 'matchGen.numberOfCourts',
   roundRobinTotalPairs: 'matchGen.roundRobinTotalPairs',
   courtMatchups: 'matchGen.courtMatchups',
   lastCourtTeams: 'matchGen.lastCourtTeams',
@@ -49,21 +50,27 @@ const DEFAULT_SHARE_PRIMARY_PHOTO_NAME = 'primary-photo.jpg'
 const DEFAULT_SHARE_EVENT_NAME = 'Event Name'
 const DEFAULT_SHARE_EVENT_DATE = ''
 
-const defaultCourtTeams = {
-  champions: ['Player 1 / Player 2', 'Player 3 / Player 4'],
-  battlefield: ['Player 5 / Player 6', 'Player 7 / Player 8'],
+const MIN_COURTS = 1
+const MAX_COURTS = 10
+const PLAYERS_PER_COURT = 4
+
+const clampCourtCount = (value) => {
+  if (!Number.isInteger(value)) return 2
+  if (value < MIN_COURTS) return MIN_COURTS
+  if (value > MAX_COURTS) return MAX_COURTS
+  return value
 }
 
-const courts = [
-  {
-    id: 'champions',
-    name: 'Court 1',
-  },
-  {
-    id: 'battlefield',
-    name: 'Court 2',
-  },
-]
+const resizeCourtArray = (arr, count, fillValue) => {
+  const source = Array.isArray(arr) ? arr : []
+  const next = source.slice(0, count)
+  while (next.length < count) {
+    next.push(typeof fillValue === 'function' ? fillValue() : fillValue)
+  }
+  return next
+}
+
+const getCourtLabel = (courtIndex) => `Court ${(courtIndex ?? 0) + 1}`
 
 const basePlayers = playersData.map((player) => {
   const rating = player.duprRating || player.clubRating || ''
@@ -94,6 +101,21 @@ const basePlayers = playersData.map((player) => {
 const ADMIN_STANDBY_IDS = new Set(['player-1', 'player-4'])
 const PARTNER_MEMORY_ROUNDS = 2
 const OPEN_ROTATION_MAX_GAMES_GAP = 1
+const buildOpenRotationCooldown = (previousIds, recentMatchPlayerIds, maxSize) => {
+  const previous = Array.isArray(previousIds) ? previousIds : []
+  const incoming = []
+  const seenIncoming = new Set()
+  recentMatchPlayerIds.forEach((id) => {
+    if (!id || seenIncoming.has(id)) return
+    seenIncoming.add(id)
+    incoming.push(id)
+  })
+  if (!Number.isFinite(maxSize) || maxSize <= 0) return []
+  if (incoming.length === 0) return previous.slice(-maxSize)
+  const incomingSet = new Set(incoming)
+  const retained = previous.filter((id) => !incomingSet.has(id))
+  return [...retained, ...incoming].slice(-maxSize)
+}
 
 const loadPlayers = () => {
   if (typeof window === 'undefined') return basePlayers
@@ -145,55 +167,51 @@ const loadMatchHistory = () => {
   }
 }
 
-const loadCourtMatchups = () => {
-  if (typeof window === 'undefined') {
-    return { champions: null, battlefield: null }
-  }
+const loadCourtMatchups = (courtCount) => {
+  const count = clampCourtCount(courtCount)
+  const defaultArray = Array(count).fill(null)
+  if (typeof window === 'undefined') return defaultArray
   const stored = window.localStorage.getItem(STORAGE_KEYS.courtMatchups)
-  if (!stored) return { champions: null, battlefield: null }
+  if (!stored) return defaultArray
   try {
     const parsed = JSON.parse(stored)
-    if (!parsed || typeof parsed !== 'object') {
-      return { champions: null, battlefield: null }
+    if (Array.isArray(parsed)) {
+      return resizeCourtArray(parsed, count, null)
     }
-    return {
-      champions: parsed.champions ?? null,
-      battlefield: parsed.battlefield ?? null,
-    }
+    return defaultArray
   } catch (error) {
-    return { champions: null, battlefield: null }
+    return defaultArray
   }
 }
 
-const loadLastCourtTeams = () => {
-  if (typeof window === 'undefined') {
-    return { champions: null, battlefield: null }
-  }
+const normalizeStoredTeams = (teams) => {
+  if (!Array.isArray(teams)) return null
+  return teams.map((team) =>
+    Array.isArray(team)
+      ? team
+          .map((player) =>
+            typeof player === 'string' ? player : player?.id
+          )
+          .filter(Boolean)
+      : []
+  )
+}
+
+const loadLastCourtTeams = (courtCount) => {
+  const count = clampCourtCount(courtCount)
+  const defaultArray = Array(count).fill(null)
+  if (typeof window === 'undefined') return defaultArray
   const stored = window.localStorage.getItem(STORAGE_KEYS.lastCourtTeams)
-  if (!stored) return { champions: null, battlefield: null }
+  if (!stored) return defaultArray
   try {
     const parsed = JSON.parse(stored)
-    if (!parsed || typeof parsed !== 'object') {
-      return { champions: null, battlefield: null }
+    if (Array.isArray(parsed)) {
+      const normalized = parsed.map((entry) => normalizeStoredTeams(entry))
+      return resizeCourtArray(normalized, count, null)
     }
-    const normalizeTeams = (teams) => {
-      if (!Array.isArray(teams)) return null
-      return teams.map((team) =>
-        Array.isArray(team)
-          ? team
-              .map((player) =>
-                typeof player === 'string' ? player : player?.id
-              )
-              .filter(Boolean)
-          : []
-      )
-    }
-    return {
-      champions: normalizeTeams(parsed.champions),
-      battlefield: normalizeTeams(parsed.battlefield),
-    }
+    return defaultArray
   } catch (error) {
-    return { champions: null, battlefield: null }
+    return defaultArray
   }
 }
 
@@ -229,6 +247,12 @@ const loadPlayerFormat = () => {
   if (typeof window === 'undefined') return 'random'
   const stored = window.localStorage.getItem(STORAGE_KEYS.playerFormat)
   return stored || 'random'
+}
+
+const loadNumberOfCourts = () => {
+  if (typeof window === 'undefined') return 2
+  const stored = Number(window.localStorage.getItem(STORAGE_KEYS.numberOfCourts))
+  return clampCourtCount(stored)
 }
 
 const loadInitialView = () => (loadSessionStarted() ? 'courts' : 'home')
@@ -378,20 +402,24 @@ const getTeamPlayerIdsFromLabel = (teamLabel, playerIdLookupByName) => {
     .filter(Boolean)
 }
 
+// Partner memory is intentionally GLOBAL (not per-court). Walk the most
+// recent `windowSize` matches across all courts so a pair that just played on
+// Court 1 is still discouraged when generating Court 2's next match. Callers
+// typically pass `PARTNER_MEMORY_ROUNDS * numberOfCourts` so the original
+// "last N rounds" intent scales with the number of courts in play.
 const getRecentPartnerHistory = (
   history = [],
   players = [],
-  courtLabel,
   windowSize = PARTNER_MEMORY_ROUNDS
 ) => {
-  if (!courtLabel || windowSize <= 0) return new Set()
+  if (windowSize <= 0) return new Set()
   const playerIdLookupByName = new Map(players.map((player) => [player.name, player.id]))
   const recentPairs = new Set()
-  let roundsCounted = 0
+  let matchesCounted = 0
 
   for (let index = 0; index < history.length; index += 1) {
     const match = history[index]
-    if (!match || match.court !== courtLabel) continue
+    if (!match) continue
     const teamAIds = getTeamPlayerIdsFromLabel(match.teamA, playerIdLookupByName)
     const teamBIds = getTeamPlayerIdsFromLabel(match.teamB, playerIdLookupByName)
     const teams = [teamAIds, teamBIds]
@@ -402,8 +430,8 @@ const getRecentPartnerHistory = (
       if (partnerKey) recentPairs.add(partnerKey)
     })
 
-    roundsCounted += 1
-    if (roundsCounted >= windowSize) break
+    matchesCounted += 1
+    if (matchesCounted >= windowSize) break
   }
 
   return recentPairs
@@ -451,24 +479,27 @@ function App() {
   const [isEndingSession, setIsEndingSession] = useState(false)
   const [gameType, setGameType] = useState(loadGameType)
   const [playerFormat, setPlayerFormat] = useState(loadPlayerFormat)
+  const [numberOfCourts, setNumberOfCourts] = useState(loadNumberOfCourts)
   const [exportMenuOpen, setExportMenuOpen] = useState(null)
   const [modalMode, setModalMode] = useState('add')
   const [editingId, setEditingId] = useState(null)
   const [infoModalOpen, setInfoModalOpen] = useState(false)
   const [infoTab, setInfoTab] = useState('match-engine-plain')
-  const [courtMatchups, setCourtMatchups] = useState(loadCourtMatchups)
-  const [lastCourtTeams, setLastCourtTeams] = useState(loadLastCourtTeams)
-  const [courtStatus, setCourtStatus] = useState({
-    champions: 'idle',
-    battlefield: 'idle',
-  })
-  const [courtHolds, setCourtHolds] = useState({
-    champions: [],
-    battlefield: [],
-  })
-  // Global cooldown for Open Rotation: players from the most recently
-  // completed match are temporarily deprioritized for the next generation
-  // on either court.
+  const [courtMatchups, setCourtMatchups] = useState(() =>
+    loadCourtMatchups(numberOfCourts)
+  )
+  const [lastCourtTeams, setLastCourtTeams] = useState(() =>
+    loadLastCourtTeams(numberOfCourts)
+  )
+  const [courtStatus, setCourtStatus] = useState(() =>
+    Array(numberOfCourts).fill('idle')
+  )
+  const [courtHolds, setCourtHolds] = useState(() =>
+    Array.from({ length: numberOfCourts }, () => [])
+  )
+  // Global cooldown for Open Rotation: keep a rolling set of recently
+  // finished players across courts so the latest submissions are all
+  // temporarily deprioritized.
   const [openRotationCooldownIds, setOpenRotationCooldownIds] = useState([])
   const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
@@ -483,7 +514,7 @@ function App() {
   })
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
-    courtId: null,
+    courtIndex: null,
     teamA: [],
     teamB: [],
     scoreA: '',
@@ -524,7 +555,7 @@ function App() {
         : gameType === 'claim' && playerFormat === 'random'
           ? splitStayRandomEngine
           : roundRobinEngineDefault
-  const { buildRoundFromPlayers, enforceExclusivePlayers } = activeMatchEngine
+  const { buildCourtTeams, enforceExclusivePlayers } = activeMatchEngine
   const [endSessionModal, setEndSessionModal] = useState({
     isOpen: false,
     password: '',
@@ -532,7 +563,7 @@ function App() {
   })
   const [editCourtModal, setEditCourtModal] = useState({
     isOpen: false,
-    courtId: null,
+    courtIndex: null,
     teamAIds: ['', ''],
     teamBIds: ['', ''],
   })
@@ -551,13 +582,12 @@ function App() {
     password: '',
     error: '',
   })
-  const [refreshCounts, setRefreshCounts] = useState({
-    champions: 0,
-    battlefield: 0,
-  })
+  const [refreshCounts, setRefreshCounts] = useState(() =>
+    Array(numberOfCourts).fill(0)
+  )
   const [refreshModal, setRefreshModal] = useState({
     isOpen: false,
-    courtId: null,
+    courtIndex: null,
     password: '',
     error: '',
   })
@@ -634,11 +664,24 @@ function App() {
     (animal) => (teamCounts[animal] ?? 0) < 2
   )
   const showTeamName = playerFormat === 'custom' && gameType !== 'claim'
-  const isBattlefieldDisabled = checkedInCount < 8
+  const visibleCourtCount = Math.min(
+    numberOfCourts,
+    Math.floor(checkedInCount / PLAYERS_PER_COURT)
+  )
   const infoContent =
     infoTab === 'match-engine-plain'
       ? matchEnginePlainDoc
       : standingsPlainDoc
+
+  const handleSelectNumberOfCourts = (nextValue) => {
+    const clamped = clampCourtCount(nextValue)
+    setNumberOfCourts(clamped)
+    setCourtMatchups((prev) => resizeCourtArray(prev, clamped, null))
+    setLastCourtTeams((prev) => resizeCourtArray(prev, clamped, null))
+    setCourtStatus((prev) => resizeCourtArray(prev, clamped, 'idle'))
+    setCourtHolds((prev) => resizeCourtArray(prev, clamped, () => []))
+    setRefreshCounts((prev) => resizeCourtArray(prev, clamped, 0))
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -670,6 +713,14 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(STORAGE_KEYS.playerFormat, playerFormat)
   }, [playerFormat])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(
+      STORAGE_KEYS.numberOfCourts,
+      String(numberOfCourts)
+    )
+  }, [numberOfCourts])
 
   useEffect(() => {
     if (gameType !== 'open-rotation') return
@@ -772,11 +823,12 @@ function App() {
     closeEndSessionModal()
     window.setTimeout(() => {
       setPlayers(basePlayers)
-      setCourtMatchups({ champions: null, battlefield: null })
-      setCourtStatus({ champions: 'idle', battlefield: 'idle' })
-      setCourtHolds({ champions: [], battlefield: [] })
+      setCourtMatchups(Array(numberOfCourts).fill(null))
+      setLastCourtTeams(Array(numberOfCourts).fill(null))
+      setCourtStatus(Array(numberOfCourts).fill('idle'))
+      setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
       setOpenRotationCooldownIds([])
-      setRefreshCounts({ champions: 0, battlefield: 0 })
+      setRefreshCounts(Array(numberOfCourts).fill(0))
       setMatchHistory([])
       setLastGeneratedTeams([])
       setSessionStarted(false)
@@ -787,6 +839,7 @@ function App() {
         window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
         window.localStorage.removeItem(STORAGE_KEYS.gameType)
         window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
+        window.localStorage.removeItem(STORAGE_KEYS.numberOfCourts)
         window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
         window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
         window.localStorage.removeItem(STORAGE_KEYS.lastCourtTeams)
@@ -806,11 +859,12 @@ function App() {
       return
     }
     setPlayers(basePlayers)
-    setCourtMatchups({ champions: null, battlefield: null })
-    setCourtStatus({ champions: 'idle', battlefield: 'idle' })
-    setCourtHolds({ champions: [], battlefield: [] })
+    setCourtMatchups(Array(numberOfCourts).fill(null))
+    setLastCourtTeams(Array(numberOfCourts).fill(null))
+    setCourtStatus(Array(numberOfCourts).fill('idle'))
+    setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
     setOpenRotationCooldownIds([])
-    setRefreshCounts({ champions: 0, battlefield: 0 })
+    setRefreshCounts(Array(numberOfCourts).fill(0))
     setMatchHistory([])
     setLastGeneratedTeams([])
     setSessionStarted(false)
@@ -821,6 +875,7 @@ function App() {
       window.localStorage.removeItem(STORAGE_KEYS.sessionStarted)
       window.localStorage.removeItem(STORAGE_KEYS.gameType)
       window.localStorage.removeItem(STORAGE_KEYS.playerFormat)
+      window.localStorage.removeItem(STORAGE_KEYS.numberOfCourts)
     window.localStorage.removeItem(STORAGE_KEYS.roundRobinTotalPairs)
     window.localStorage.removeItem(STORAGE_KEYS.courtMatchups)
       window.localStorage.removeItem(STORAGE_KEYS.lastCourtTeams)
@@ -829,10 +884,10 @@ function App() {
     closeResetModal()
   }
 
-  const openRefreshModal = (courtId) => {
+  const openRefreshModal = (courtIndex) => {
     setRefreshModal({
       isOpen: true,
-      courtId,
+      courtIndex,
       password: '',
       error: '',
     })
@@ -841,7 +896,7 @@ function App() {
   const closeRefreshModal = () => {
     setRefreshModal({
       isOpen: false,
-      courtId: null,
+      courtIndex: null,
       password: '',
       error: '',
     })
@@ -975,12 +1030,6 @@ function App() {
 
   const handleCheckIn = (playerId) => {
     setPlayers((prev) => {
-      const minGames = prev.reduce((min, player) => {
-        if (!player.checkedIn || player.id === playerId) return min
-        const games = player.gamesPlayed ?? 0
-        return games < min ? games : min
-      }, Number.POSITIVE_INFINITY)
-      const normalizedGames = Number.isFinite(minGames) ? minGames : 0
       const maxQueueOrder = prev.reduce((max, player) => {
         const order = player.queueOrder ?? 0
         return order > max ? order : max
@@ -989,11 +1038,10 @@ function App() {
 
       return prev.map((player) => {
         if (player.id !== playerId) return player
-        const currentGames = player.gamesPlayed ?? 0
         return {
           ...player,
           checkedIn: true,
-          gamesPlayed: Math.max(currentGames, normalizedGames),
+          gamesPlayed: 0,
           queueOrder: nextQueueOrder,
         }
       })
@@ -1006,10 +1054,14 @@ function App() {
         player.id === playerId ? { ...player, checkedIn: false } : player
       )
     )
-    setCourtHolds((prev) => ({
-      champions: (prev.champions ?? []).filter((id) => id !== playerId),
-      battlefield: (prev.battlefield ?? []).filter((id) => id !== playerId),
-    }))
+    setOpenRotationCooldownIds((prev) =>
+      (Array.isArray(prev) ? prev : []).filter((id) => id !== playerId)
+    )
+    setCourtHolds((prev) =>
+      (Array.isArray(prev) ? prev : []).map((holds) =>
+        (holds ?? []).filter((id) => id !== playerId)
+      )
+    )
     const clearIfContainsPlayer = (teams) => {
       if (!Array.isArray(teams)) return teams
       const containsPlayer = teams.some((team) =>
@@ -1017,57 +1069,82 @@ function App() {
       )
       return containsPlayer ? null : teams
     }
-    const nextMatchups = {
-      champions: clearIfContainsPlayer(courtMatchups.champions),
-      battlefield: clearIfContainsPlayer(courtMatchups.battlefield),
-    }
+    const nextMatchups = (Array.isArray(courtMatchups) ? courtMatchups : []).map(
+      (teams) => clearIfContainsPlayer(teams)
+    )
     setCourtMatchups(nextMatchups)
-    setCourtStatus((prev) => ({
-      ...prev,
-      champions: nextMatchups.champions ? prev.champions : 'waiting',
-      battlefield: nextMatchups.battlefield ? prev.battlefield : 'waiting',
-    }))
+    setCourtStatus((prev) =>
+      (Array.isArray(prev) ? prev : []).map((status, index) =>
+        nextMatchups[index] ? status : 'waiting'
+      )
+    )
   }
 
-  const handleGenerateCourts = (courtId, options = {}) => {
-    if (refreshCounts[courtId] >= 1 && !options.force) {
-      openRefreshModal(courtId)
+  const handleGenerateCourts = (courtIndex, options = {}) => {
+    if (!Number.isInteger(courtIndex) || courtIndex < 0) return
+    if ((refreshCounts[courtIndex] ?? 0) >= 1 && !options.force) {
+      openRefreshModal(courtIndex)
       return
     }
+    const courtLabel = getCourtLabel(courtIndex)
+    const failGenerate = (reason) => {
+      setToastMessage(`Unable to generate ${courtLabel}: ${reason}`)
+    }
     const occupiedPlayers = new Set(
-      (courtId === 'battlefield'
-        ? courtMatchups.champions
-        : courtMatchups.battlefield
-      )?.flatMap((team) => team.map((player) => player.id)) ?? []
+      (Array.isArray(courtMatchups) ? courtMatchups : []).flatMap(
+        (teams, index) => {
+          if (index === courtIndex) return []
+          if (!Array.isArray(teams)) return []
+          return teams.flatMap((team) =>
+            (team ?? []).map((player) => player.id)
+          )
+        }
+      )
     )
+    const isOpenRotation = gameType === 'open-rotation'
     const isRoundRobinCustom =
       gameType === 'round-robin' && playerFormat === 'custom'
-    const holdIds = new Set(courtHolds[courtId] ?? [])
-    const holdPlayers = (courtHolds[courtId] ?? [])
-      .map((playerId) => players.find((player) => player.id === playerId))
-      .filter(Boolean)
-    const eligiblePlayers = players.filter(
-      (player) =>
-        player.checkedIn &&
-        !occupiedPlayers.has(player.id) &&
-        !holdIds.has(player.id)
-    )
-    const roundRobinPlayers = isRoundRobinCustom
-      ? players.filter(
-          (player) => player.checkedIn && !occupiedPlayers.has(player.id)
+    const holdIds = isOpenRotation
+      ? new Set()
+      : new Set(courtHolds[courtIndex] ?? [])
+    const holdPlayers = isOpenRotation
+      ? []
+      : (courtHolds[courtIndex] ?? [])
+          .map((playerId) => players.find((player) => player.id === playerId))
+          .filter(Boolean)
+    const eligiblePlayers = isOpenRotation
+      ? []
+      : players.filter(
+          (player) =>
+            player.checkedIn &&
+            !occupiedPlayers.has(player.id) &&
+            !holdIds.has(player.id)
         )
-      : []
-    if (isRoundRobinCustom) {
-      if (roundRobinPlayers.length < 4) return
-      if (courtId === 'battlefield' && isBattlefieldDisabled) return
-    } else {
-      if (holdPlayers.length + eligiblePlayers.length < 4) return
-      if (courtId === 'battlefield' && isBattlefieldDisabled) return
+    const roundRobinPlayers = isOpenRotation
+      ? []
+      : isRoundRobinCustom
+        ? players.filter(
+            (player) => player.checkedIn && !occupiedPlayers.has(player.id)
+          )
+        : []
+    if (!isOpenRotation) {
+      if (isRoundRobinCustom) {
+        if (roundRobinPlayers.length < 4) {
+          failGenerate('not enough available checked-in players')
+          return
+        }
+      } else if (holdPlayers.length + eligiblePlayers.length < 4) {
+        failGenerate('need at least 4 available players')
+        return
+      }
     }
 
     if (isRoundRobinCustom) {
       const candidateTeams = buildCustomTeams(roundRobinPlayers)
-      if (candidateTeams.length < 2) return
+      if (candidateTeams.length < 2) {
+        failGenerate('not enough available teams')
+        return
+      }
 
       const candidateNames = candidateTeams.map((team) => team.name)
       const candidateSet = new Set(candidateNames)
@@ -1140,31 +1217,33 @@ function App() {
       const [teamA, teamB] = selection.teams
       const selectedTeams = [teamA.players, teamB.players]
 
-      setCourtMatchups((prev) => ({
-        ...prev,
-        champions:
-          courtId === 'champions' ? selectedTeams : prev.champions,
-        battlefield:
-          courtId === 'battlefield' && !isBattlefieldDisabled
-            ? selectedTeams
-            : prev.battlefield,
-      }))
-      if (courtId === 'champions') {
-        setCourtStatus((prev) => ({ ...prev, champions: 'idle' }))
-      }
-      if (courtId === 'battlefield') {
-        setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
-      }
-      setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
+      setCourtMatchups((prev) =>
+        (Array.isArray(prev) ? prev : []).map((teams, index) =>
+          index === courtIndex ? selectedTeams : teams
+        )
+      )
+      setCourtStatus((prev) =>
+        (Array.isArray(prev) ? prev : []).map((status, index) =>
+          index === courtIndex ? 'idle' : status
+        )
+      )
+      setRefreshCounts((prev) =>
+        (Array.isArray(prev) ? prev : []).map((count, index) =>
+          index === courtIndex ? (count ?? 0) + 1 : count
+        )
+      )
       setLastGeneratedTeams(selectedTeams.map(getTeamName).filter(Boolean))
       return
     }
 
-    if (gameType === 'open-rotation') {
+    if (isOpenRotation) {
       const eligibleForOpen = players.filter(
         (player) => player.checkedIn && !occupiedPlayers.has(player.id)
       )
-      if (eligibleForOpen.length < 4) return
+      if (eligibleForOpen.length < 4) {
+        failGenerate('not enough available checked-in players')
+        return
+      }
 
       const sortByOrder = (a, b) =>
         (a.queueOrder ?? 0) - (b.queueOrder ?? 0)
@@ -1205,17 +1284,40 @@ function App() {
             (player.winStreak ?? 0) === 0
         )
         .sort(sortByOrder)
-
-      const noOneHasPlayed = fairnessPool.every(
-        (player) => (player.gamesPlayed ?? 0) === 0
-      )
+      const zeroGamePlayers = fairnessPool
+        .filter((player) => (player.gamesPlayed ?? 0) === 0)
+        .sort(sortByOrder)
+      const sortByZeroThenOrder = (a, b) => {
+        const aGroup = (a.gamesPlayed ?? 0) === 0 ? 0 : 1
+        const bGroup = (b.gamesPlayed ?? 0) === 0 ? 0 : 1
+        if (aGroup !== bGroup) return aGroup - bGroup
+        return sortByOrder(a, b)
+      }
 
       let candidatePlayers
-      if (noOneHasPlayed) {
-        // Bootstrap: both queues are conceptually empty; randomize the
-        // first 4 from check-in order.
-        candidatePlayers = shuffleList(losersQueue.slice(0, 4))
+      if (zeroGamePlayers.length > 0) {
+        // Priority mode: ensure never-played players are selected first.
+        candidatePlayers = zeroGamePlayers.slice(0, 4)
+        if (candidatePlayers.length < 4) {
+          const selectedZeroIds = new Set(
+            candidatePlayers.map((player) => player.id)
+          )
+          const supplementalWinners = winnersQueue.filter(
+            (player) => !selectedZeroIds.has(player.id)
+          )
+          const supplementalLosers = losersQueue.filter(
+            (player) => !selectedZeroIds.has(player.id)
+          )
+          const picked = winnerLoserQueueEngine.pickCourtPlayers(
+            supplementalWinners,
+            supplementalLosers,
+            [],
+            4 - candidatePlayers.length
+          )
+          candidatePlayers = [...candidatePlayers, ...picked.players]
+        }
       } else {
+        // Once everyone has played at least one game, prioritize W/L queues.
         const picked = winnerLoserQueueEngine.pickCourtPlayers(
           winnersQueue,
           losersQueue,
@@ -1243,6 +1345,14 @@ function App() {
           if (!cooldownSet.has(player.id)) return player
 
           selectedIds.delete(player.id)
+          const zeroGameReplacement = findReplacement(
+            zeroGamePlayers,
+            selectedIds
+          )
+          if (zeroGameReplacement) {
+            selectedIds.add(zeroGameReplacement.id)
+            return zeroGameReplacement
+          }
           const preferredPool = isWinnerQueuePlayer(player)
             ? losersQueue
             : winnersQueue
@@ -1272,7 +1382,7 @@ function App() {
         const selectedIds = new Set(selectedPlayers.map((p) => p.id))
         const fallback = fairnessPool
           .filter((player) => !selectedIds.has(player.id))
-          .sort(sortByOrder)
+          .sort(sortByZeroThenOrder)
         while (selectedPlayers.length < 4 && fallback.length > 0) {
           const next = fallback.shift()
           if (!next || selectedIds.has(next.id)) continue
@@ -1288,7 +1398,7 @@ function App() {
         if (selectedPlayers.length < 4) {
           const overflowFallback = selectionPool
             .filter((player) => !selectedIds.has(player.id))
-            .sort(sortByOrder)
+            .sort(sortByZeroThenOrder)
           while (selectedPlayers.length < 4 && overflowFallback.length > 0) {
             const next = overflowFallback.shift()
             if (!next || selectedIds.has(next.id)) continue
@@ -1304,37 +1414,36 @@ function App() {
         }
       }
 
-      if (selectedPlayers.length < 4) return
+      if (selectedPlayers.length < 4) {
+        failGenerate('could not build a valid 4-player matchup')
+        return
+      }
 
-      const openRotationCourtLabel =
-        courtId === 'champions' ? 'Court 1' : 'Court 2'
       const recentPartners = getRecentPartnerHistory(
         matchHistory,
         players,
-        openRotationCourtLabel,
-        PARTNER_MEMORY_ROUNDS
+        PARTNER_MEMORY_ROUNDS * Math.max(numberOfCourts, 1)
       )
-      const round = buildRoundFromPlayers(
+      const teams = winnerLoserQueueEngine.buildCourtTeams(
         selectedPlayers,
-        [],
         recentPartners
       )
 
-      setCourtMatchups((prev) => ({
-        ...prev,
-        champions: courtId === 'champions' ? round.champions : prev.champions,
-        battlefield:
-          courtId === 'battlefield' && !isBattlefieldDisabled
-            ? round.champions
-            : prev.battlefield,
-      }))
-      if (courtId === 'champions') {
-        setCourtStatus((prev) => ({ ...prev, champions: 'idle' }))
-      }
-      if (courtId === 'battlefield') {
-        setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
-      }
-      setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
+      setCourtMatchups((prev) =>
+        (Array.isArray(prev) ? prev : []).map((existing, index) =>
+          index === courtIndex ? teams : existing
+        )
+      )
+      setCourtStatus((prev) =>
+        (Array.isArray(prev) ? prev : []).map((status, index) =>
+          index === courtIndex ? 'idle' : status
+        )
+      )
+      setRefreshCounts((prev) =>
+        (Array.isArray(prev) ? prev : []).map((count, index) =>
+          index === courtIndex ? (count ?? 0) + 1 : count
+        )
+      )
       return
     }
 
@@ -1433,17 +1542,17 @@ function App() {
       selectedPlayers = uniqueSelected
     }
     const existingTeams =
-      (courtMatchups[courtId] ?? []).length > 0
-        ? courtMatchups[courtId]
-        : (lastCourtTeams[courtId] ?? [])
+      (Array.isArray(courtMatchups[courtIndex]) &&
+      courtMatchups[courtIndex].length > 0
+        ? courtMatchups[courtIndex]
+        : (lastCourtTeams[courtIndex] ?? [])
             .map((team) =>
               (team ?? [])
                 .map((playerId) =>
                   players.find((player) => player.id === playerId)
                 )
                 .filter(Boolean)
-            )
-    const courtLabel = courtId === 'champions' ? 'Court 1' : 'Court 2'
+            )) ?? []
     let round = isSplitStayRandom
       ? (() => {
           const lastPartners = new Map()
@@ -1459,14 +1568,14 @@ function App() {
             )
             if (partners.length >= 2) {
               return {
-                champions: [
+                teams: [
                   [holdPlayers[0], partners[0]],
                   [holdPlayers[1], partners[1]],
                 ],
               }
             }
           }
-          return buildRoundFromPlayers(selectedPlayers, [], lastPartners)
+          return { teams: buildCourtTeams(selectedPlayers, lastPartners) }
         })()
       : (() => {
           const partnerHistory = new Set()
@@ -1475,7 +1584,7 @@ function App() {
             partnerHistory.add(`${team[0].id}:${team[1].id}`)
             partnerHistory.add(`${team[1].id}:${team[0].id}`)
           })
-          return buildRoundFromPlayers(selectedPlayers, [], partnerHistory)
+          return { teams: buildCourtTeams(selectedPlayers, partnerHistory) }
         })()
 
     if (isSplitStayRandom) {
@@ -1507,8 +1616,7 @@ function App() {
         const recentPartnerKeys = getRecentPartnerHistory(
           matchHistory,
           players,
-          courtLabel,
-          PARTNER_MEMORY_ROUNDS
+          PARTNER_MEMORY_ROUNDS * Math.max(numberOfCourts, 1)
         )
         existingTeams.forEach((team) => {
           if (!Array.isArray(team) || team.length < 2) return
@@ -1586,7 +1694,7 @@ function App() {
           )
           const selectedPairing =
             shuffleList(balancedCandidates)[0] ?? shuffleList(candidatePairings)[0]
-          round = { champions: selectedPairing.teams }
+          round = { teams: selectedPairing.teams }
           if (minRepeatCount > 0) {
             setToastMessage(
               `No fully fresh partners in last ${PARTNER_MEMORY_ROUNDS} rounds. Using least-repeat fallback.`
@@ -1596,30 +1704,30 @@ function App() {
       }
     }
 
-    setCourtMatchups((prev) => ({
-      ...prev,
-      champions: courtId === 'champions' ? round.champions : prev.champions,
-      battlefield:
-        courtId === 'battlefield' && !isBattlefieldDisabled
-          ? round.champions
-          : prev.battlefield,
-    }))
-    if (courtId === 'champions') {
-      setCourtStatus((prev) => ({ ...prev, champions: 'idle' }))
-    }
-    if (courtId === 'battlefield') {
-      setCourtStatus((prev) => ({ ...prev, battlefield: 'idle' }))
-    }
-    setRefreshCounts((prev) => ({ ...prev, [courtId]: prev[courtId] + 1 }))
+    setCourtMatchups((prev) =>
+      (Array.isArray(prev) ? prev : []).map((existing, index) =>
+        index === courtIndex ? round.teams : existing
+      )
+    )
+    setCourtStatus((prev) =>
+      (Array.isArray(prev) ? prev : []).map((status, index) =>
+        index === courtIndex ? 'idle' : status
+      )
+    )
+    setRefreshCounts((prev) =>
+      (Array.isArray(prev) ? prev : []).map((count, index) =>
+        index === courtIndex ? (count ?? 0) + 1 : count
+      )
+    )
   }
 
-  const openScoreModal = (courtId) => {
-    const teams = courtMatchups[courtId]
+  const openScoreModal = (courtIndex) => {
+    const teams = courtMatchups[courtIndex]
     if (!teams || teams.length < 2) return
 
     setScoreModal({
       isOpen: true,
-      courtId,
+      courtIndex,
       teamA: teams[0],
       teamB: teams[1],
       scoreA: '',
@@ -1636,8 +1744,8 @@ function App() {
   const closeScoreModal = () => {
     setScoreModal({
       isOpen: false,
-      courtId: null,
-      teamA: [], 
+      courtIndex: null,
+      teamA: [],
       teamB: [],
       scoreA: '',
       scoreB: '',
@@ -1719,12 +1827,16 @@ function App() {
         pointsFor: 0,
         pointsAgainst: 0,
         pointDifferential: 0,
+        queueOrder: 0,
       }))
     )
-    setCourtMatchups({ champions: null, battlefield: null })
-    setCourtStatus({ champions: 'waiting', battlefield: 'waiting' })
+    setCourtMatchups(Array(numberOfCourts).fill(null))
+    setCourtStatus(Array(numberOfCourts).fill('waiting'))
+    setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
+    setRefreshCounts(Array(numberOfCourts).fill(0))
     setOpenRotationCooldownIds([])
-    setLastCourtTeams({ champions: null, battlefield: null })
+    setLastCourtTeams(Array(numberOfCourts).fill(null))
+    setLastGeneratedTeams([])
     setExportMenuOpen(null)
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEYS.matchHistory)
@@ -1816,21 +1928,27 @@ function App() {
       ...prev,
     ])
     if (gameType === 'open-rotation') {
-      setOpenRotationCooldownIds([...teamAIds, ...teamBIds])
+      const cooldownSize = Math.max(
+        PLAYERS_PER_COURT,
+        visibleCourtCount * PLAYERS_PER_COURT
+      )
+      setOpenRotationCooldownIds((prev) =>
+        buildOpenRotationCooldown(prev, [...teamAIds, ...teamBIds], cooldownSize)
+      )
     }
     setToastMessage('Match added to history')
     closeManualMatchModal()
   }
 
-  const openEditCourtModal = (courtId) => {
-    const currentMatchup = courtMatchups[courtId]
+  const openEditCourtModal = (courtIndex) => {
+    const currentMatchup = courtMatchups[courtIndex]
     const teamAIds = currentMatchup?.[0]?.map((player) => player.id) ?? []
     const teamBIds = currentMatchup?.[1]?.map((player) => player.id) ?? []
     const normalizeIds = (ids) => [ids[0] ?? '', ids[1] ?? '']
 
     setEditCourtModal({
       isOpen: true,
-      courtId,
+      courtIndex,
       teamAIds: normalizeIds(teamAIds),
       teamBIds: normalizeIds(teamBIds),
     })
@@ -1844,7 +1962,7 @@ function App() {
   const closeEditCourtModal = () => {
     setEditCourtModal({
       isOpen: false,
-      courtId: null,
+      courtIndex: null,
       teamAIds: ['', ''],
       teamBIds: ['', ''],
     })
@@ -1880,14 +1998,17 @@ function App() {
       .map((id) => players.find((player) => player.id === id))
       .filter(Boolean)
 
-    setCourtMatchups((prev) => ({
-      ...prev,
-      [editCourtModal.courtId]: [teamAPlayers, teamBPlayers],
-    }))
-    setCourtStatus((prev) => ({
-      ...prev,
-      [editCourtModal.courtId]: 'idle',
-    }))
+    const { courtIndex } = editCourtModal
+    setCourtMatchups((prev) =>
+      (Array.isArray(prev) ? prev : []).map((teams, index) =>
+        index === courtIndex ? [teamAPlayers, teamBPlayers] : teams
+      )
+    )
+    setCourtStatus((prev) =>
+      (Array.isArray(prev) ? prev : []).map((status, index) =>
+        index === courtIndex ? 'idle' : status
+      )
+    )
     closeEditCourtModal()
   }
 
@@ -1929,30 +2050,34 @@ function App() {
     )
     const nextHoldIds = []
 
-    // For Open Rotation, build a queueOrder map so winners flow to the back of
-    // the Winners queue and losers flow to the back of the Losers queue with a
-    // strict, monotonic ordering (winners first across both courts in this
-    // submission, then losers).
+    // For Open Rotation, rebuild queueOrder globally every score submission so
+    // values stay coherent and never drift over a long session. Order:
+    //   1) all non-match players sorted by current queueOrder (ascending)
+    //   2) match winners (appended in submitted order)
+    //   3) match losers (appended in submitted order)
+    // Then we reassign sequential 1..N. This preserves the existing
+    // "winners/losers go to the back" semantics while eliminating stale values.
     let openRotationOrderMap = null
     if (isOpenRotation) {
-      const maxQueueOrder = players.reduce((max, player) => {
-        const order = player.queueOrder ?? 0
-        return order > max ? order : max
-      }, 0)
-      openRotationOrderMap = new Map()
-      let cursor = maxQueueOrder + 1
+      const matchPlayerIds = new Set([
+        ...scoreModal.teamA.map((player) => player.id),
+        ...scoreModal.teamB.map((player) => player.id),
+      ])
+      const nonMatchPlayers = players
+        .filter((player) => !matchPlayerIds.has(player.id))
+        .slice()
+        .sort((a, b) => (a.queueOrder ?? 0) - (b.queueOrder ?? 0))
       const allMatchPlayers = [...scoreModal.teamA, ...scoreModal.teamB]
-      allMatchPlayers.forEach((player) => {
-        if (winnerIds.has(player.id)) {
-          openRotationOrderMap.set(player.id, cursor)
-          cursor += 1
-        }
-      })
-      allMatchPlayers.forEach((player) => {
-        if (!winnerIds.has(player.id)) {
-          openRotationOrderMap.set(player.id, cursor)
-          cursor += 1
-        }
+      const matchWinners = allMatchPlayers.filter((player) =>
+        winnerIds.has(player.id)
+      )
+      const matchLosers = allMatchPlayers.filter(
+        (player) => !winnerIds.has(player.id)
+      )
+      const rebuiltOrder = [...nonMatchPlayers, ...matchWinners, ...matchLosers]
+      openRotationOrderMap = new Map()
+      rebuiltOrder.forEach((player, index) => {
+        openRotationOrderMap.set(player.id, index + 1)
       })
     }
 
@@ -1960,7 +2085,14 @@ function App() {
       prev.map((player) => {
         const isTeamA = scoreModal.teamA.some((member) => member.id === player.id)
         const isTeamB = scoreModal.teamB.some((member) => member.id === player.id)
-        if (!isTeamA && !isTeamB) return player
+        const queueOrderUpdate =
+          isOpenRotation && openRotationOrderMap?.has(player.id)
+            ? { queueOrder: openRotationOrderMap.get(player.id) }
+            : {}
+
+        if (!isTeamA && !isTeamB) {
+          return { ...player, ...queueOrderUpdate }
+        }
 
         const pointsFor = player.pointsFor ?? 0
         const pointsAgainst = player.pointsAgainst ?? 0
@@ -1999,25 +2131,24 @@ function App() {
           pointsFor: nextPointsFor,
           pointsAgainst: nextPointsAgainst,
           pointDifferential: nextPointDifferential,
-          ...(isOpenRotation && openRotationOrderMap?.has(player.id)
-            ? { queueOrder: openRotationOrderMap.get(player.id) }
-            : {}),
+          ...queueOrderUpdate,
         }
       })
     )
-    if (
-      (gameType === 'round-robin' && playerFormat === 'custom') ||
-      isOpenRotation
-    ) {
-      setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: [] }))
-    } else {
-      setCourtHolds((prev) => ({ ...prev, [scoreModal.courtId]: nextHoldIds }))
-    }
+    const { courtIndex } = scoreModal
+    const holdsToWrite =
+      (gameType === 'round-robin' && playerFormat === 'custom') || isOpenRotation
+        ? []
+        : nextHoldIds
+    setCourtHolds((prev) =>
+      (Array.isArray(prev) ? prev : []).map((holds, index) =>
+        index === courtIndex ? holdsToWrite : holds
+      )
+    )
 
     const teamAName = scoreModal.teamA.map((player) => player.name).join(' / ')
     const teamBName = scoreModal.teamB.map((player) => player.name).join(' / ')
-    const courtLabel =
-      scoreModal.courtId === 'champions' ? 'Court 1' : 'Court 2'
+    const courtLabel = getCourtLabel(courtIndex)
     const teamAKey = getTeamName(scoreModal.teamA)
     const teamBKey = getTeamName(scoreModal.teamB)
     setMatchHistory((prev) => [
@@ -2034,31 +2165,45 @@ function App() {
       ...prev,
     ])
 
-    setLastCourtTeams((prev) => ({
-      ...prev,
-      [scoreModal.courtId]: [
-        scoreModal.teamA.map((player) => player.id),
-        scoreModal.teamB.map((player) => player.id),
-      ],
-    }))
+    setLastCourtTeams((prev) =>
+      (Array.isArray(prev) ? prev : []).map((teams, index) =>
+        index === courtIndex
+          ? [
+              scoreModal.teamA.map((player) => player.id),
+              scoreModal.teamB.map((player) => player.id),
+            ]
+          : teams
+      )
+    )
     if (isOpenRotation) {
-      setOpenRotationCooldownIds([
+      const cooldownSize = Math.max(
+        PLAYERS_PER_COURT,
+        visibleCourtCount * PLAYERS_PER_COURT
+      )
+      const recentMatchPlayerIds = [
         ...scoreModal.teamA.map((player) => player.id),
         ...scoreModal.teamB.map((player) => player.id),
-      ])
+      ]
+      setOpenRotationCooldownIds((prev) =>
+        buildOpenRotationCooldown(prev, recentMatchPlayerIds, cooldownSize)
+      )
     }
 
-    if (scoreModal.courtId === 'champions') {
-      setCourtMatchups((prev) => ({ ...prev, champions: null }))
-      setCourtStatus((prev) => ({ ...prev, champions: 'waiting' }))
-      setRefreshCounts((prev) => ({ ...prev, champions: 0 }))
-    }
-
-    if (scoreModal.courtId === 'battlefield') {
-      setCourtMatchups((prev) => ({ ...prev, battlefield: null }))
-      setCourtStatus((prev) => ({ ...prev, battlefield: 'waiting' }))
-      setRefreshCounts((prev) => ({ ...prev, battlefield: 0 }))
-    }
+    setCourtMatchups((prev) =>
+      (Array.isArray(prev) ? prev : []).map((teams, index) =>
+        index === courtIndex ? null : teams
+      )
+    )
+    setCourtStatus((prev) =>
+      (Array.isArray(prev) ? prev : []).map((status, index) =>
+        index === courtIndex ? 'waiting' : status
+      )
+    )
+    setRefreshCounts((prev) =>
+      (Array.isArray(prev) ? prev : []).map((count, index) =>
+        index === courtIndex ? 0 : count
+      )
+    )
 
     setToastMessage('Score saved successfully')
     closeScoreModal()
@@ -2073,9 +2218,9 @@ function App() {
       }))
       return
     }
-    const courtId = refreshModal.courtId
+    const courtIndex = refreshModal.courtIndex
     closeRefreshModal()
-    handleGenerateCourts(courtId, { force: true })
+    handleGenerateCourts(courtIndex, { force: true })
   }
 
   const normalizePlayerType = (value) => {
@@ -2434,7 +2579,9 @@ function App() {
       (player) => player.id === currentId || !selectedCourtIds.has(player.id)
     )
   const editCourtLabel =
-    courts.find((court) => court.id === editCourtModal.courtId)?.name ?? 'Court'
+    typeof editCourtModal.courtIndex === 'number'
+      ? getCourtLabel(editCourtModal.courtIndex)
+      : 'Court'
 
   return (
     <>
@@ -2538,6 +2685,7 @@ function App() {
           <GameSetupView
             gameType={gameType}
             playerFormat={playerFormat}
+            numberOfCourts={numberOfCourts}
             sessionStarted={sessionStarted}
             isStartingSession={isStartingSession}
             isEndingSession={isEndingSession}
@@ -2554,6 +2702,7 @@ function App() {
               }
             }}
             onSelectPlayerFormat={setPlayerFormat}
+            onSelectNumberOfCourts={handleSelectNumberOfCourts}
             onStartSession={() => {
               if (isStartingSession) return
               setIsStartingSession(true)
@@ -2622,11 +2771,9 @@ function App() {
               </div>
             ) : null}
             <CourtsView
-              courts={courts}
-              defaultCourtTeams={defaultCourtTeams}
+              visibleCourtCount={visibleCourtCount}
               courtMatchups={courtMatchups}
               courtStatus={courtStatus}
-              isBattlefieldDisabled={isBattlefieldDisabled}
               onGenerateCourts={handleGenerateCourts}
               onEditCourt={openEditCourtModal}
               onOpenScore={openScoreModal}
@@ -2760,7 +2907,9 @@ function App() {
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
-                Gender <span className="text-red-500">*</span>
+                <span>
+                  Gender <span className="text-red-500">*</span>
+                </span>
                 <select
                   required
                   aria-invalid={formErrors.gender ? 'true' : 'false'}
@@ -3186,7 +3335,7 @@ function App() {
                     className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                   >
                     <option value="">Select score</option>
-                    {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                    {Array.from({ length: 16 }, (_, index) => index).map(
                       (score) => (
                         <option key={score} value={score}>
                           {score}
@@ -3213,7 +3362,7 @@ function App() {
                     className="rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                   >
                     <option value="">Select score</option>
-                    {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                    {Array.from({ length: 16 }, (_, index) => index).map(
                       (score) => (
                         <option key={score} value={score}>
                           {score}
@@ -3306,7 +3455,7 @@ function App() {
                   className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                 >
                   <option value="">Select score</option>
-                  {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                  {Array.from({ length: 16 }, (_, index) => index).map(
                     (score) => (
                       <option key={score} value={score}>
                         {score}
@@ -3337,7 +3486,7 @@ function App() {
                   className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-slate-400"
                 >
                   <option value="">Select score</option>
-                  {Array.from({ length: 15 }, (_, index) => index + 1).map(
+                  {Array.from({ length: 16 }, (_, index) => index).map(
                     (score) => (
                       <option key={score} value={score}>
                         {score}

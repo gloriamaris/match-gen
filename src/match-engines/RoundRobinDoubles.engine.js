@@ -104,6 +104,9 @@ const buildRoundFromPlayers = (
   }
 }
 
+const buildCourtTeams = (players, partnerHistory = new Set()) =>
+  splitIntoTeams(players ?? [], partnerHistory)
+
 const createInitialState = (players, options = {}) => {
   const sorted = sortPlayersBySkill(players).map((player, index) => ({
     ...player,
@@ -409,6 +412,7 @@ const enforceExclusivePlayers = (players, exclusiveIds) => {
 
 export {
   buildRoundFromPlayers,
+  buildCourtTeams,
   sortPlayersBySkill,
   createInitialState,
   assignCourtsForRound,

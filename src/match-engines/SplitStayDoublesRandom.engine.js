@@ -166,6 +166,12 @@ const buildRoundFromPlayers = (
   }
 }
 
+// Court-agnostic primitive: produces a single court's two teams from the
+// given player pool. Callers loop this per court index for the dynamic-
+// court model so there is no implicit champions/battlefield split.
+const buildCourtTeams = (players, lastPartners = new Map()) =>
+  splitIntoTeams(players ?? [], lastPartners)
+
 const createInitialState = (players, options = {}) => {
   const eligiblePlayers = players.filter((player) => player.checkedIn)
   const sorted = sortPlayersBySkill(eligiblePlayers).map((player, index) => ({
@@ -344,6 +350,7 @@ const enforceExclusivePlayers = (players, exclusiveIds) => {
 
 export {
   buildRoundFromPlayers,
+  buildCourtTeams,
   sortPlayersBySkill,
   createInitialState,
   assignCourtsForRound,

@@ -1,8 +1,3 @@
-const DEFAULT_COURTS = {
-  champions: 'Champions Court',
-  battlefield: 'Battlefield Court',
-}
-
 const COURT_SIZE = 4
 
 const shuffle = (items) => {
@@ -41,13 +36,6 @@ const classifyPlayer = (player) => {
 }
 
 const isWinnerPlayer = (player) => classifyPlayer(player) === 'winner'
-
-const sortByQueueOrder = (a, b) => {
-  const orderA = a.queueOrder ?? 0
-  const orderB = b.queueOrder ?? 0
-  if (orderA !== orderB) return orderA - orderB
-  return (a.name ?? '').localeCompare(b.name ?? '')
-}
 
 const getGender = (player) => (player?.gender || '').toUpperCase()
 
@@ -141,6 +129,12 @@ const buildRoundFromPlayers = (
   }
 }
 
+// Court-agnostic primitive: produces a single court's two teams from the
+// given player pool. Callers (App.jsx) loop this per court index for the
+// dynamic-court model.
+const buildCourtTeams = (players, recentPartners = new Set()) =>
+  splitIntoTeams(players ?? [], recentPartners)
+
 // Pick `count` players for one court from the W/L queues, alternating
 // W, L, W, L. When both queues are empty the court is bootstrapped from
 // the check-in queue (shuffled). When one queue runs short, fall through
@@ -196,156 +190,6 @@ const pickCourtPlayers = (
   }
 }
 
-const createInitialState = (players, options = {}) => {
-  const eligiblePlayers = players.filter((player) => player.checkedIn)
-  const seeded = [...eligiblePlayers]
-    .sort(sortByQueueOrder)
-    .map((player, index) => ({
-      ...player,
-      gamesPlayed: player.gamesPlayed ?? 0,
-      winStreak: player.winStreak ?? 0,
-      queueOrder: player.queueOrder ?? index,
-    }))
-
-  const checkInQueue = [...seeded]
-  const championsPick = pickCourtPlayers([], [], checkInQueue, COURT_SIZE)
-  const battlefieldPick = pickCourtPlayers(
-    [],
-    [],
-    championsPick.checkInQueue,
-    COURT_SIZE
-  )
-
-  return {
-    courts: {
-      champions: championsPick.players,
-      battlefield: battlefieldPick.players,
-    },
-    checkInQueue: battlefieldPick.checkInQueue,
-    winnersQueue: [],
-    losersQueue: [],
-    nextQueueOrder: seeded.length,
-    options: {
-      courts: DEFAULT_COURTS,
-      ...options,
-    },
-  }
-}
-
-const assignCourtsForRound = (state) => {
-  const championsPlayers = (state.courts?.champions ?? []).slice(0, COURT_SIZE)
-  const battlefieldPlayers = (state.courts?.battlefield ?? []).slice(
-    0,
-    COURT_SIZE
-  )
-
-  return {
-    champions: splitIntoTeams(championsPlayers),
-    battlefield: splitIntoTeams(battlefieldPlayers),
-  }
-}
-
-const applyRoundResults = (state, results) => {
-  const updatedPlayers = new Map()
-  const winnersQueue = [...(state.winnersQueue ?? [])]
-  const losersQueue = [...(state.losersQueue ?? [])]
-  let nextQueueOrder = state.nextQueueOrder ?? 0
-
-  const registerPlayer = (player, updates) => {
-    updatedPlayers.set(player.id, {
-      ...player,
-      winStreak: updates.winStreak,
-      gamesPlayed: updates.gamesPlayed,
-      location: updates.location,
-    })
-  }
-
-  const handleCourt = (winners, losers) => {
-    winners.forEach((player) => {
-      const nextGames = (player.gamesPlayed ?? 0) + 1
-      const nextStreak = (player.winStreak ?? 0) + 1
-      winnersQueue.push({
-        ...player,
-        winStreak: nextStreak,
-        gamesPlayed: nextGames,
-        queueOrder: nextQueueOrder,
-      })
-      nextQueueOrder += 1
-      registerPlayer(player, {
-        winStreak: nextStreak,
-        gamesPlayed: nextGames,
-        location: 'queue',
-      })
-    })
-
-    losers.forEach((player) => {
-      const nextGames = (player.gamesPlayed ?? 0) + 1
-      losersQueue.push({
-        ...player,
-        winStreak: 0,
-        gamesPlayed: nextGames,
-        queueOrder: nextQueueOrder,
-      })
-      nextQueueOrder += 1
-      registerPlayer(player, {
-        winStreak: 0,
-        gamesPlayed: nextGames,
-        location: 'queue',
-      })
-    })
-  }
-
-  handleCourt(results.champions.winners, results.champions.losers)
-  handleCourt(results.battlefield.winners, results.battlefield.losers)
-
-  return {
-    ...state,
-    winnersQueue,
-    losersQueue,
-    nextQueueOrder,
-    updatedPlayers,
-  }
-}
-
-const buildNextRound = (state, results) => {
-  const applied = applyRoundResults(state, results)
-  let { winnersQueue, losersQueue, checkInQueue } = applied
-  const courts = {}
-  const round = {}
-
-  ;['champions', 'battlefield'].forEach((courtName) => {
-    const picked = pickCourtPlayers(
-      winnersQueue,
-      losersQueue,
-      checkInQueue,
-      COURT_SIZE
-    )
-    winnersQueue = picked.winnersQueue
-    losersQueue = picked.losersQueue
-    checkInQueue = picked.checkInQueue
-    courts[courtName] = picked.players
-    round[courtName] = splitIntoTeams(picked.players)
-  })
-
-  return {
-    ...applied,
-    winnersQueue,
-    losersQueue,
-    checkInQueue,
-    courts,
-    round,
-  }
-}
-
-const formatRoundOutput = (round) => {
-  const formatTeam = (team) => team.map((player) => player.name).join(' / ')
-
-  return {
-    champions: (round?.champions ?? []).map((team) => formatTeam(team)),
-    battlefield: (round?.battlefield ?? []).map((team) => formatTeam(team)),
-  }
-}
-
 const enforceExclusivePlayers = (players, exclusiveIds) => {
   const selected = []
   let exclusivePicked = false
@@ -363,12 +207,8 @@ const enforceExclusivePlayers = (players, exclusiveIds) => {
 
 export {
   buildRoundFromPlayers,
+  buildCourtTeams,
   classifyPlayer,
   pickCourtPlayers,
-  createInitialState,
-  assignCourtsForRound,
-  applyRoundResults,
-  buildNextRound,
-  formatRoundOutput,
   enforceExclusivePlayers,
 }

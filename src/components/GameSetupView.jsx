@@ -10,11 +10,13 @@ const activeButton =
 export default function GameSetupView({
   gameType,
   playerFormat,
+  numberOfCourts,
   sessionStarted,
   isStartingSession,
   isEndingSession,
   onSelectGameType,
   onSelectPlayerFormat,
+  onSelectNumberOfCourts,
   onStartSession,
   onEndSession,
 }) {
@@ -25,6 +27,7 @@ export default function GameSetupView({
   const selectionDisabled =
     sessionStarted || isStartingSession || isEndingSession
   const selectionClasses = selectionDisabled ? 'opacity-60' : ''
+  const courtOptions = Array.from({ length: 10 }, (_, index) => index + 1)
   return (
     <div className="space-y-8">
       <div className="flex justify-end">
@@ -120,6 +123,26 @@ export default function GameSetupView({
             Custom teams
           </button>
         </div>
+      </section>
+
+      <section className={`space-y-3 ${selectionClasses}`}>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Number of Courts
+        </h2>
+        <select
+          value={numberOfCourts}
+          onChange={(event) => onSelectNumberOfCourts(Number(event.target.value))}
+          disabled={selectionDisabled}
+          className={`w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition ${
+            selectionDisabled ? 'cursor-not-allowed opacity-60' : ''
+          }`}
+        >
+          {courtOptions.map((count) => (
+            <option key={count} value={count}>
+              {count}
+            </option>
+          ))}
+        </select>
       </section>
     </div>
   )
