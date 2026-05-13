@@ -2,6 +2,11 @@
 
 This document describes how standings are calculated and displayed in the app.
 Standings are derived from recorded match scores in `src/App.jsx`.
+These standings rules apply to all game formats:
+
+- Split & Stay (DUPR)
+- Round Robin (Bagging Nights)
+- Open Rotation (Non-DUPR)
 
 ## Data tracked per player
 
@@ -35,7 +40,7 @@ When a valid score is saved:
 
 The match is also logged into the match history, including:
 
-- Court label (`Court 1` or `Court 2`)
+- Court label (`Court 1` to `Court N`, based on configured court count)
 - Team names
 - Final score
 - Verifier name

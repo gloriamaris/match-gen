@@ -1,37 +1,48 @@
 # Match generation (plain-English)
 
-This page explains how the app creates matchups without using any technical terms.
+This page explains how matchups are created in each game format, in simple terms.
 
 ## The big idea
 
-- Players are ranked by skill so the starting courts are fair.
-- Two courts run at the same time, and everyone else waits in a queue.
-- Teams are always two players each.
+- You choose a game format in Game Setup.
+- You choose the number of courts (1 to 10).
+- A court is only shown if there are enough checked-in players to fill it.
+- Every match is doubles (2 players vs 2 players).
 
-## How a round is built
+Visible courts are calculated as:
 
-1. The top players go to Champions Court.
-2. The next group goes to Battlefield Court.
-3. Everyone else waits in the queue.
-4. Each court gets two teams of two, and the app tries not to repeat the same
-   partners too often.
+- `visible courts = min(number of courts selected, floor(checked-in players / 4))`
 
-## What happens after a game
+## Game formats
 
-- Everyone’s games played count goes up.
-- The losing team goes back to the queue.
-- Winners stay on the court, but only up to two wins in a row.
-- If someone wins two straight games, they rotate out to keep things moving.
-- Champions Court players who lose four times get moved to Battlefield Court.
-- Battlefield Court players who win four times get moved to Champions Court.
+## 1) Split & Stay (DUPR)
 
-## How the queue stays fair
+- Uses random team generation.
+- Winners stay on the same court for one more game (max 2 wins in a row).
+- If two winners stay, they are placed on opposite teams next game.
+- Two new players are pulled in from the queue/fairness order.
+- After a player reaches the stay cap, they rotate out.
 
-- Players with fewer total games get picked first.
-- Players who have already played a lot wait a bit longer.
+## 2) Round Robin (Bagging Nights)
 
-## Why this feels fair
+- Uses custom teams (`teamName` pairs).
+- The app avoids repeating the same team-vs-team matchup.
+- It prefers fair pairings (teams with fewer games first).
+- In multi-court sessions, if no valid pair is available right now, the app
+  shows a "no team pair available right now" message.
+- Round Robin is only complete when all possible team matchups have been played.
 
-- Skill ranking gives a balanced start.
-- The two-win rule prevents anyone from staying on forever.
-- The queue system helps everyone get similar court time.
+## 3) Open Rotation (Non-DUPR)
+
+- Uses random team generation.
+- Players with zero games are prioritized first.
+- Then the app uses queue order and fairness rules to choose who plays next.
+- A rolling cooldown helps avoid immediate back-to-back repeats.
+- Partner-memory checks reduce immediate repeat partner pairings.
+
+## What updates after each score
+
+- Players in the match get `gamesPlayed + 1`.
+- Winners and losers update standings stats (wins/losses/points).
+- The match is saved to history.
+- The next matchup is generated using the rules of the selected format.

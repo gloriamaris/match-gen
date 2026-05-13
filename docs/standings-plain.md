@@ -1,6 +1,8 @@
 # Standings (plain-English)
 
 This page explains how the standings table works without technical terms.
+It works the same way across all game formats (Split & Stay, Round Robin, and
+Open Rotation).
 
 ## The big idea
 

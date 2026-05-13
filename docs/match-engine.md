@@ -1,125 +1,108 @@
 # Match Engine Documentation
 
-This document describes the match engine logic implemented in `src/matchEngine.js`
-and how it is used by the app to build courts and teams.
+This app no longer uses a single monolithic `src/matchEngine.js`.
+Match generation is orchestrated in `src/App.jsx` and delegated to small,
+game-type-specific helpers in `src/match-engines/`.
 
-## Player model (engine fields)
+## Current architecture
 
-The match engine expects player objects with the following fields:
+### Core app responsibilities (`src/App.jsx`)
 
-- `id` (string): Unique player identifier.
-- `name` (string): Display name for roster and team labels.
-- `duprRating` (string or number): Primary rating used for seeding.
-- `clubRating` (string or number): Secondary rating used if no DUPR.
-- `gamesPlayed` (number): Total games played.
-- `queueOrder` (number): Stable queue order for tie breaks.
-- `winStreak` (number): Current consecutive wins (used for rotation logic).
+- Maintains player/session state and score history.
+- Manages dynamic court count (`numberOfCourts`, 1 to 10).
+- Renders only fillable courts:
+  `visibleCourtCount = min(numberOfCourts, floor(checkedInCount / 4))`.
+- Selects generation branch by game type and format.
+- Applies fairness rules, holds, and cooldown where relevant.
 
-The UI extends these objects with additional fields like `wins`, `losses`,
-`pointsFor`, and `pointsAgainst`, but those are used for standings rather
-than court assignment.
+### Engine responsibilities (`src/match-engines/*`)
 
-## Courts and pools
+Engines are now intentionally small, court-agnostic primitives. The app selects
+players for a court, then asks the engine to split them into teams.
 
-The engine models two courts:
+Current exports used by the app:
 
-- `champions` (Champions Court)
-- `battlefield` (Battlefield Court)
+- `buildCourtTeams(players, partnerHistoryOrMap)`
+- `enforceExclusivePlayers(players, exclusiveIds)`
 
-Each court is filled with 4 active players per round (2 teams of 2). The
-engine also maintains a queue for players who are waiting to rotate in.
+## Game-type behavior
 
-## Core algorithms
+## Format availability matrix
 
-### Sorting players by skill
+- `Split & Stay (DUPR)` (`gameType='claim'`): random teams only
+- `Round Robin (Bagging Nights)` (`gameType='round-robin'`): custom teams only
+- `Open Rotation (Non-DUPR)` (`gameType='open-rotation'`): random teams only
 
-`sortPlayersBySkill(players)` sorts players in descending order by:
+`GameSetupView` enforces these combinations by disabling unsupported format
+buttons for each game type.
 
-1. `duprRating` (if present), otherwise
-2. `clubRating` (if present), otherwise
-3. `name` (alphabetical)
+## 1) Split & Stay (DUPR) (`gameType='claim'`, random teams)
 
-This is used to seed the initial court pools and to break ties in queue
-selection.
+Files:
 
-### Initial state
+- `src/App.jsx`
+- `src/match-engines/SplitStayDoublesRandom.engine.js`
 
-`createInitialState(players, options)` sorts the full roster, then:
+Behavior:
 
-- First 8 players go to `champions`
-- Next 8 players go to `battlefield`
-- Remaining players go to the `queue`
+- Per-court hold logic is handled in `App.jsx`.
+- Winners can stay for one additional match (`winStreak < 2`).
+- When two winners stay on a court, they are forced onto opposing teams in the
+  next generated matchup for that same court.
+- New players are pulled from queue-style ordering with fairness/cooldown rules.
+- The engine only forms teams from the selected 4 players.
 
-The function also initializes `partnerHistory` and stores optional court
-labels (`DEFAULT_COURTS`) in `state.options.courts`.
+## 2) Round Robin (Bagging Nights) (`gameType='round-robin'`, custom teams)
 
-### Building teams for a round
+Files:
 
-`buildRoundFromPlayers(championsPlayers, battlefieldPlayers, partnerHistory)`
-shuffles each pool and forms teams of two. Pairing attempts to avoid repeat
-partners by checking `partnerHistory`.
+- `src/App.jsx`
+- `src/match-engines/RoundRobinDoublesCustomTeams.engine.js`
 
-`assignCourtsForRound(state)` does the same pairing, but reads the current
-players already assigned to each court.
+Behavior:
 
-### Applying results
+- Teams are built from player `teamName` pairs.
+- The app avoids previously played team-vs-team combinations using
+  `playedMatchups`.
+- Pair selection prefers fairness (lowest combined/max games among available
+  non-repeated pairings).
+- In multi-court sessions, "no pair available right now" is treated as a
+  temporary scheduling condition (toast), not automatic completion.
+- Round-robin completion is driven by global remaining pairs
+  (`roundRobinRemainingPairs === 0`).
 
-`applyRoundResults(state, results)` updates players based on winners/losers:
+## 3) Open Rotation (Non-DUPR) (`gameType='open-rotation'`, random teams)
 
-- All players get `gamesPlayed + 1`.
-- Winners get `winStreak + 1`.
-- Losers reset `winStreak` to `0` and go to the queue.
-- Winners who reach `winStreak >= 2` also reset their streak and go to the queue.
-- Everyone who moves to the queue is appended (preserving order).
+Files:
 
-This creates the "two wins then rotate out" rule.
+- `src/App.jsx`
+- `src/match-engines/WinnerLoserQueueDoubles.engine.js`
 
-### Building the next round
+Behavior:
 
-`buildNextRound(state, results)`:
+- Queue/fairness-first player picking with rolling cooldown.
+- Prioritizes zero-game players before general queue order where possible.
+- Uses global partner-memory windows to reduce immediate repeat pairings.
+- No per-court winner holds.
 
-1. Calls `applyRoundResults`.
-2. Prioritizes the queue with `prioritizeQueue`.
-3. Keeps eligible winners (those with `winStreak < 2`) on court.
-4. Fills remaining court spots from the queue.
-5. Rebuilds teams using `splitIntoTeamsWithConstraints`, which avoids:
-   - Repeat partners (via `partnerHistory`)
-   - Pairing two winners together on the same team
+## Player fields used by generation
 
-### Queue prioritization
+Commonly used fields include:
 
-`prioritizeQueue(queue)` keeps play balanced by:
+- `id`, `name`, `checkedIn`
+- `gamesPlayed`, `queueOrder`, `winStreak`
+- `gender` (used by some team-balancing heuristics)
+- `teamName` (round robin custom teams)
 
-- Finding the minimum `gamesPlayed` in the queue.
-- Prioritizing players whose `gamesPlayed` is within 2 games of that minimum.
-- Sorting by `gamesPlayed`, then `queueOrder`.
+Standing fields (`wins`, `losses`, `pointsFor`, `pointsAgainst`,
+`pointDifferential`) are updated from score submission and are used for ranking,
+not direct court eligibility.
 
-Players who are far ahead in games played are moved to the end.
+## Dynamic court labels
 
-### Refilling courts
+Court labels are generated as:
 
-`refillCourts(state, promotedPlayers)` is a helper that:
+- `Court 1`, `Court 2`, ..., `Court N`
 
-- Starts `champions` with any promoted players.
-- Fills the rest of `champions` up to 8 from the queue.
-- Fills `battlefield` up to 8 from the remaining queue.
-
-### Formatting output
-
-`formatRoundOutput(round)` converts each team into a string in the form:
-
-```
-Player A / Player B
-```
-
-This is used for display purposes when needed.
-
-## App integration
-
-The app uses two exported helpers directly:
-
-- `sortPlayersBySkill` for seeding rotation pools.
-- `buildRoundFromPlayers` for creating the court matchups shown on the UI.
-
-The rest of the engine is available for future expansion, such as persisting
-state across rounds or running automated round generation.
+There are no longer hardcoded "Champions Court" or "Battlefield Court" labels
+in active app logic.

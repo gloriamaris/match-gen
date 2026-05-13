@@ -100,8 +100,8 @@ const basePlayers = playersData.map((player) => {
 
 const ADMIN_STANDBY_IDS = new Set(['player-1', 'player-4'])
 const PARTNER_MEMORY_ROUNDS = 2
-const OPEN_ROTATION_MAX_GAMES_GAP = 1
-const buildOpenRotationCooldown = (previousIds, recentMatchPlayerIds, maxSize) => {
+const MATCH_FAIRNESS_MAX_GAMES_GAP = 1
+const buildRollingMatchCooldown = (previousIds, recentMatchPlayerIds, maxSize) => {
   const previous = Array.isArray(previousIds) ? previousIds : []
   const incoming = []
   const seenIncoming = new Set()
@@ -115,6 +115,58 @@ const buildOpenRotationCooldown = (previousIds, recentMatchPlayerIds, maxSize) =
   const incomingSet = new Set(incoming)
   const retained = previous.filter((id) => !incomingSet.has(id))
   return [...retained, ...incoming].slice(-maxSize)
+}
+
+// Shared queue-selection helper used by game types that draw players from a
+// queue (Split & Stay's top-up, etc.). Applies — in order:
+//   1) cooldown filter (with fallback when too few non-cooldown candidates)
+//   2) fairness gap filter (with fallback when too few within-gap candidates)
+//   3) zero-game-first sort, then by gamesPlayed asc, then queueOrder asc.
+// Returns up to `neededCount` players plus the remaining pool.
+const pickQueuePlayers = (queue, neededCount, options = {}) => {
+  if (!Array.isArray(queue) || queue.length === 0 || neededCount <= 0) {
+    return { picked: [], remaining: Array.isArray(queue) ? [...queue] : [] }
+  }
+  const { cooldownSet, gap = MATCH_FAIRNESS_MAX_GAMES_GAP } = options
+  const cooldown = cooldownSet instanceof Set ? cooldownSet : new Set()
+
+  const nonCooldown = queue.filter((player) => !cooldown.has(player.id))
+  const cooldownPool = cooldown.size > 0 && nonCooldown.length >= neededCount
+    ? nonCooldown
+    : queue
+
+  const minGamesInPool = cooldownPool.reduce((min, player) => {
+    const games = player.gamesPlayed ?? 0
+    return games < min ? games : min
+  }, Number.POSITIVE_INFINITY)
+  const maxPreferredGames = Number.isFinite(minGamesInPool)
+    ? minGamesInPool + gap
+    : Number.POSITIVE_INFINITY
+  const withinGap = cooldownPool.filter(
+    (player) => (player.gamesPlayed ?? 0) <= maxPreferredGames
+  )
+  const fairnessPool = withinGap.length >= neededCount ? withinGap : cooldownPool
+
+  const sortByOrder = (a, b) => (a.queueOrder ?? 0) - (b.queueOrder ?? 0)
+  const sortByGamesThenOrder = (a, b) => {
+    const gamesA = a.gamesPlayed ?? 0
+    const gamesB = b.gamesPlayed ?? 0
+    if (gamesA !== gamesB) return gamesA - gamesB
+    return sortByOrder(a, b)
+  }
+
+  const zeroGame = fairnessPool
+    .filter((player) => (player.gamesPlayed ?? 0) === 0)
+    .sort(sortByOrder)
+  const nonZero = fairnessPool
+    .filter((player) => (player.gamesPlayed ?? 0) > 0)
+    .sort(sortByGamesThenOrder)
+  const ordered = [...zeroGame, ...nonZero]
+
+  const picked = ordered.slice(0, neededCount)
+  const pickedIds = new Set(picked.map((player) => player.id))
+  const remaining = queue.filter((player) => !pickedIds.has(player.id))
+  return { picked, remaining }
 }
 
 const loadPlayers = () => {
@@ -501,6 +553,11 @@ function App() {
   // finished players across courts so the latest submissions are all
   // temporarily deprioritized.
   const [openRotationCooldownIds, setOpenRotationCooldownIds] = useState([])
+  // Split & Stay rolling cooldown: IDs of players who just finished and
+  // were sent back to the queue (losers + capped winners). Mirrors the
+  // Open Rotation cooldown semantics. Winners that "stay" remain in
+  // courtHolds[courtIndex] (per-court) and skip cooldown entirely.
+  const [splitStayCooldownIds, setSplitStayCooldownIds] = useState([])
   const [matchHistory, setMatchHistory] = useState(loadMatchHistory)
   const [formValues, setFormValues] = useState({
     teamName: '',
@@ -828,6 +885,7 @@ function App() {
       setCourtStatus(Array(numberOfCourts).fill('idle'))
       setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
       setOpenRotationCooldownIds([])
+      setSplitStayCooldownIds([])
       setRefreshCounts(Array(numberOfCourts).fill(0))
       setMatchHistory([])
       setLastGeneratedTeams([])
@@ -864,6 +922,7 @@ function App() {
     setCourtStatus(Array(numberOfCourts).fill('idle'))
     setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
     setOpenRotationCooldownIds([])
+    setSplitStayCooldownIds([])
     setRefreshCounts(Array(numberOfCourts).fill(0))
     setMatchHistory([])
     setLastGeneratedTeams([])
@@ -1057,6 +1116,9 @@ function App() {
     setOpenRotationCooldownIds((prev) =>
       (Array.isArray(prev) ? prev : []).filter((id) => id !== playerId)
     )
+    setSplitStayCooldownIds((prev) =>
+      (Array.isArray(prev) ? prev : []).filter((id) => id !== playerId)
+    )
     setCourtHolds((prev) =>
       (Array.isArray(prev) ? prev : []).map((holds) =>
         (holds ?? []).filter((id) => id !== playerId)
@@ -1102,8 +1164,12 @@ function App() {
       )
     )
     const isOpenRotation = gameType === 'open-rotation'
+    const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
     const isRoundRobinCustom =
       gameType === 'round-robin' && playerFormat === 'custom'
+    // Open Rotation has no concept of per-court holds and computes its own
+    // pool entirely; everything else (including Split & Stay's stay-on-court
+    // winners) reads holds from courtHolds[courtIndex].
     const holdIds = isOpenRotation
       ? new Set()
       : new Set(courtHolds[courtIndex] ?? [])
@@ -1195,7 +1261,14 @@ function App() {
       }
 
       if (availablePairs.length === 0) {
-        setRoundRobinCompleteModalOpen(true)
+        // Distinguish "round robin truly complete" from "all unplayed pairs
+        // happen to involve teams currently on another court". Without this,
+        // a busy multi-court session can falsely fire the completion modal.
+        if (roundRobinRemainingPairs === 0) {
+          setRoundRobinCompleteModalOpen(true)
+        } else {
+          failGenerate('no team pair available right now')
+        }
         return
       }
 
@@ -1260,7 +1333,7 @@ function App() {
         return games < min ? games : min
       }, Number.POSITIVE_INFINITY)
       const maxPreferredGames = Number.isFinite(minGamesInSelectionPool)
-        ? minGamesInSelectionPool + OPEN_ROTATION_MAX_GAMES_GAP
+        ? minGamesInSelectionPool + MATCH_FAIRNESS_MAX_GAMES_GAP
         : Number.POSITIVE_INFINITY
       const withinGapPool = selectionPool.filter(
         (player) => (player.gamesPlayed ?? 0) <= maxPreferredGames
@@ -1447,6 +1520,122 @@ function App() {
       return
     }
 
+    if (isSplitStayRandom) {
+      // Split & Stay: winners stay on the SAME court. We read per-court
+      // holds (set during score submit) and top up the rest from the queue.
+      // When two winners are held, they're placed on opposing teams next
+      // round so the same pair never plays together twice in a row.
+      const cooldownSet = new Set(splitStayCooldownIds)
+      const need = 4 - holdPlayers.length
+      const initialPick =
+        need > 0
+          ? pickQueuePlayers(eligiblePlayers, need, { cooldownSet }).picked
+          : []
+      let selectedPlayers = enforceExclusivePlayers(
+        [...holdPlayers, ...initialPick],
+        ADMIN_STANDBY_IDS
+      )
+
+      // If admin exclusivity dropped us below 4, refill from the queue.
+      if (selectedPlayers.length < 4) {
+        const usedIds = new Set(selectedPlayers.map((player) => player.id))
+        let topUpQueue = eligiblePlayers.filter(
+          (player) => !usedIds.has(player.id)
+        )
+        while (selectedPlayers.length < 4 && topUpQueue.length > 0) {
+          const { picked } = pickQueuePlayers(
+            topUpQueue,
+            4 - selectedPlayers.length,
+            { cooldownSet }
+          )
+          if (picked.length === 0) break
+          let added = false
+          picked.forEach((player) => {
+            if (usedIds.has(player.id)) return
+            if (
+              ADMIN_STANDBY_IDS.has(player.id) &&
+              selectedPlayers.some((p) => ADMIN_STANDBY_IDS.has(p.id))
+            ) {
+              return
+            }
+            if (selectedPlayers.length >= 4) return
+            selectedPlayers.push(player)
+            usedIds.add(player.id)
+            added = true
+          })
+          if (!added) break
+          topUpQueue = eligiblePlayers.filter(
+            (player) => !usedIds.has(player.id)
+          )
+        }
+      }
+
+      if (selectedPlayers.length < 4) {
+        failGenerate('could not build a valid 4-player matchup')
+        return
+      }
+
+      let teams
+      const heldIdSet = new Set(holdPlayers.map((player) => player.id))
+      const heldOnCourt = selectedPlayers.filter((player) =>
+        heldIdSet.has(player.id)
+      )
+      const newOnCourt = selectedPlayers.filter(
+        (player) => !heldIdSet.has(player.id)
+      )
+
+      if (heldOnCourt.length === 2 && newOnCourt.length === 2) {
+        // Two winners stayed: split them onto opposing teams and assign one
+        // new player to each side.
+        teams = [
+          [heldOnCourt[0], newOnCourt[0]],
+          [heldOnCourt[1], newOnCourt[1]],
+        ]
+      } else {
+        // 0 or 1 winners stayed (or unusual composition): fall back to the
+        // partner-history-aware pairing engine.
+        const existingTeams =
+          (Array.isArray(courtMatchups[courtIndex]) &&
+          courtMatchups[courtIndex].length > 0
+            ? courtMatchups[courtIndex]
+            : (lastCourtTeams[courtIndex] ?? [])
+                .map((team) =>
+                  (team ?? [])
+                    .map((playerId) =>
+                      players.find((player) => player.id === playerId)
+                    )
+                    .filter(Boolean)
+                )) ?? []
+        const lastPartners = new Map()
+        existingTeams.forEach((team) => {
+          if (!Array.isArray(team) || team.length < 2) return
+          lastPartners.set(team[0].id, team[1].id)
+          lastPartners.set(team[1].id, team[0].id)
+        })
+        teams = splitStayRandomEngine.buildCourtTeams(
+          selectedPlayers,
+          lastPartners
+        )
+      }
+
+      setCourtMatchups((prev) =>
+        (Array.isArray(prev) ? prev : []).map((existing, index) =>
+          index === courtIndex ? teams : existing
+        )
+      )
+      setCourtStatus((prev) =>
+        (Array.isArray(prev) ? prev : []).map((status, index) =>
+          index === courtIndex ? 'idle' : status
+        )
+      )
+      setRefreshCounts((prev) =>
+        (Array.isArray(prev) ? prev : []).map((count, index) =>
+          index === courtIndex ? (count ?? 0) + 1 : count
+        )
+      )
+      return
+    }
+
     const targetSize = Math.max(0, 4 - holdPlayers.length)
     const minGames = eligiblePlayers.reduce((min, player) => {
       const games = player.gamesPlayed ?? 0
@@ -1504,43 +1693,7 @@ function App() {
       rotationPool.push(nextPlayer)
     }
 
-    const isSplitStayRandom = gameType === 'claim' && playerFormat === 'random'
-    let selectedPlayers = [...holdPlayers, ...rotationPool].slice(0, 4)
-    if (isSplitStayRandom) {
-      const uniqueSelected = []
-      const selectedSet = new Set()
-      selectedPlayers.forEach((player) => {
-        if (selectedSet.has(player.id)) return
-        selectedSet.add(player.id)
-        uniqueSelected.push(player)
-      })
-      if (holdPlayers.length === 2) {
-        const holdSet = new Set(holdPlayers.map((player) => player.id))
-        const partnerCandidates = uniqueSelected.filter(
-          (player) => !holdSet.has(player.id)
-        )
-        if (partnerCandidates.length < 2) {
-          const benchWinner = holdPlayers[1]
-          const keepWinner = holdPlayers[0]
-          selectedSet.delete(benchWinner.id)
-          const filtered = uniqueSelected.filter(
-            (player) => player.id !== benchWinner.id
-          )
-          uniqueSelected.length = 0
-          uniqueSelected.push(keepWinner, ...filtered.filter((player) => player.id !== keepWinner.id))
-          if (!selectedSet.has(benchWinner.id)) {
-            fallbackPool.unshift(benchWinner)
-          }
-        }
-      }
-      while (uniqueSelected.length < 4 && fallbackPool.length > 0) {
-        const nextPlayer = fallbackPool.shift()
-        if (selectedSet.has(nextPlayer.id)) continue
-        selectedSet.add(nextPlayer.id)
-        uniqueSelected.push(nextPlayer)
-      }
-      selectedPlayers = uniqueSelected
-    }
+    const selectedPlayers = [...holdPlayers, ...rotationPool].slice(0, 4)
     const existingTeams =
       (Array.isArray(courtMatchups[courtIndex]) &&
       courtMatchups[courtIndex].length > 0
@@ -1553,156 +1706,13 @@ function App() {
                 )
                 .filter(Boolean)
             )) ?? []
-    let round = isSplitStayRandom
-      ? (() => {
-          const lastPartners = new Map()
-          existingTeams.forEach((team) => {
-            if (!Array.isArray(team) || team.length < 2) return
-            lastPartners.set(team[0].id, team[1].id)
-            lastPartners.set(team[1].id, team[0].id)
-          })
-          if (holdPlayers.length === 2 && selectedPlayers.length >= 4) {
-            const holdSet = new Set(holdPlayers.map((player) => player.id))
-            const partners = selectedPlayers.filter(
-              (player) => !holdSet.has(player.id)
-            )
-            if (partners.length >= 2) {
-              return {
-                teams: [
-                  [holdPlayers[0], partners[0]],
-                  [holdPlayers[1], partners[1]],
-                ],
-              }
-            }
-          }
-          return { teams: buildCourtTeams(selectedPlayers, lastPartners) }
-        })()
-      : (() => {
-          const partnerHistory = new Set()
-          existingTeams.forEach((team) => {
-            if (!Array.isArray(team) || team.length < 2) return
-            partnerHistory.add(`${team[0].id}:${team[1].id}`)
-            partnerHistory.add(`${team[1].id}:${team[0].id}`)
-          })
-          return { teams: buildCourtTeams(selectedPlayers, partnerHistory) }
-        })()
-
-    if (isSplitStayRandom) {
-      const candidatePlayers = [...holdPlayers, ...rotationPool, ...fallbackPool]
-      const uniqueCandidates = []
-      const seenIds = new Set()
-      candidatePlayers.forEach((player) => {
-        if (!player || seenIds.has(player.id)) return
-        seenIds.add(player.id)
-        uniqueCandidates.push(player)
-      })
-      const getGender = (player) => (player?.gender || '').toUpperCase()
-      const getGenderPenalty = (team) => {
-        if (!Array.isArray(team) || team.length < 2) return 1
-        const genderA = getGender(team[0])
-        const genderB = getGender(team[1])
-        if (!genderA || !genderB) return 0
-        return genderA === genderB ? 1 : 0
-      }
-      if (uniqueCandidates.length >= 4) {
-        const pool = uniqueCandidates.slice(0, 4)
-        const uniqueHold = []
-        const holdIds = new Set()
-        holdPlayers.forEach((player) => {
-          if (!player || holdIds.has(player.id)) return
-          holdIds.add(player.id)
-          uniqueHold.push(player)
-        })
-        const recentPartnerKeys = getRecentPartnerHistory(
-          matchHistory,
-          players,
-          PARTNER_MEMORY_ROUNDS * Math.max(numberOfCourts, 1)
-        )
-        existingTeams.forEach((team) => {
-          if (!Array.isArray(team) || team.length < 2) return
-          const partnerKey = buildPartnerKey(team[0]?.id, team[1]?.id)
-          if (partnerKey) recentPartnerKeys.add(partnerKey)
-        })
-        const candidatePairings = []
-        const addPairing = (teamA, teamB) => {
-          if (!teamA || !teamB) return
-          if (teamA.length < 2 || teamB.length < 2) return
-          const isDuplicateWithinTeam =
-            teamA[0].id === teamA[1].id || teamB[0].id === teamB[1].id
-          const usedIds = new Set([...teamA, ...teamB].map((player) => player.id))
-          if (isDuplicateWithinTeam || usedIds.size < 4) return
-          const teamAKey = buildPartnerKey(teamA[0].id, teamA[1].id)
-          const teamBKey = buildPartnerKey(teamB[0].id, teamB[1].id)
-          const repeatCount =
-            (recentPartnerKeys.has(teamAKey) ? 1 : 0) +
-            (recentPartnerKeys.has(teamBKey) ? 1 : 0)
-          const genderPenalty = getGenderPenalty(teamA) + getGenderPenalty(teamB)
-          candidatePairings.push({
-            teams: [teamA, teamB],
-            repeatCount,
-            genderPenalty,
-          })
-        }
-
-        if (uniqueHold.length >= 2) {
-          const others = pool.filter((player) => !holdIds.has(player.id))
-          if (others.length >= 2) {
-            addPairing(
-              [uniqueHold[0], others[0]],
-              [uniqueHold[1], others[1]]
-            )
-            addPairing(
-              [uniqueHold[0], others[1]],
-              [uniqueHold[1], others[0]]
-            )
-          }
-        } else if (uniqueHold.length === 1) {
-          const others = pool.filter((player) => !holdIds.has(player.id))
-          if (others.length >= 3) {
-            addPairing(
-              [uniqueHold[0], others[0]],
-              [others[1], others[2]]
-            )
-            addPairing(
-              [uniqueHold[0], others[1]],
-              [others[0], others[2]]
-            )
-            addPairing(
-              [uniqueHold[0], others[2]],
-              [others[0], others[1]]
-            )
-          }
-        } else {
-          addPairing([pool[0], pool[1]], [pool[2], pool[3]])
-          addPairing([pool[0], pool[2]], [pool[1], pool[3]])
-          addPairing([pool[0], pool[3]], [pool[1], pool[2]])
-        }
-        if (candidatePairings.length > 0) {
-          const minRepeatCount = candidatePairings.reduce(
-            (min, pairing) => Math.min(min, pairing.repeatCount),
-            Number.POSITIVE_INFINITY
-          )
-          const antiRepeatCandidates = candidatePairings.filter(
-            (pairing) => pairing.repeatCount === minRepeatCount
-          )
-          const minGenderPenalty = antiRepeatCandidates.reduce(
-            (min, pairing) => Math.min(min, pairing.genderPenalty),
-            Number.POSITIVE_INFINITY
-          )
-          const balancedCandidates = antiRepeatCandidates.filter(
-            (pairing) => pairing.genderPenalty === minGenderPenalty
-          )
-          const selectedPairing =
-            shuffleList(balancedCandidates)[0] ?? shuffleList(candidatePairings)[0]
-          round = { teams: selectedPairing.teams }
-          if (minRepeatCount > 0) {
-            setToastMessage(
-              `No fully fresh partners in last ${PARTNER_MEMORY_ROUNDS} rounds. Using least-repeat fallback.`
-            )
-          }
-        }
-      }
-    }
+    const partnerHistory = new Set()
+    existingTeams.forEach((team) => {
+      if (!Array.isArray(team) || team.length < 2) return
+      partnerHistory.add(`${team[0].id}:${team[1].id}`)
+      partnerHistory.add(`${team[1].id}:${team[0].id}`)
+    })
+    const round = { teams: buildCourtTeams(selectedPlayers, partnerHistory) }
 
     setCourtMatchups((prev) =>
       (Array.isArray(prev) ? prev : []).map((existing, index) =>
@@ -1835,6 +1845,7 @@ function App() {
     setCourtHolds(Array.from({ length: numberOfCourts }, () => []))
     setRefreshCounts(Array(numberOfCourts).fill(0))
     setOpenRotationCooldownIds([])
+    setSplitStayCooldownIds([])
     setLastCourtTeams(Array(numberOfCourts).fill(null))
     setLastGeneratedTeams([])
     setExportMenuOpen(null)
@@ -1933,7 +1944,7 @@ function App() {
         visibleCourtCount * PLAYERS_PER_COURT
       )
       setOpenRotationCooldownIds((prev) =>
-        buildOpenRotationCooldown(prev, [...teamAIds, ...teamBIds], cooldownSize)
+        buildRollingMatchCooldown(prev, [...teamAIds, ...teamBIds], cooldownSize)
       )
     }
     setToastMessage('Match added to history')
@@ -2048,26 +2059,41 @@ function App() {
         (player) => player.id
       )
     )
+    const allMatchPlayers = [...scoreModal.teamA, ...scoreModal.teamB]
+    const allMatchPlayerIds = allMatchPlayers.map((player) => player.id)
     const nextHoldIds = []
 
-    // For Open Rotation, rebuild queueOrder globally every score submission so
-    // values stay coherent and never drift over a long session. Order:
+    // Split & Stay: with global migration, winners are eligible to keep
+    // playing on any court only while their next streak stays below 2. Anyone
+    // else (losers + capped winners) goes back to the queue.
+    const eligibleWinnerIds = isSplitStayRandom
+      ? new Set(
+          allMatchPlayers
+            .filter(
+              (player) =>
+                winnerIds.has(player.id) &&
+                (player.winStreak ?? 0) + 1 < 2
+            )
+            .map((player) => player.id)
+        )
+      : new Set()
+
+    // For Open Rotation and Split & Stay, rebuild queueOrder globally every
+    // score submission so values stay coherent and never drift over a long
+    // session. Order:
     //   1) all non-match players sorted by current queueOrder (ascending)
     //   2) match winners (appended in submitted order)
     //   3) match losers (appended in submitted order)
     // Then we reassign sequential 1..N. This preserves the existing
     // "winners/losers go to the back" semantics while eliminating stale values.
-    let openRotationOrderMap = null
-    if (isOpenRotation) {
-      const matchPlayerIds = new Set([
-        ...scoreModal.teamA.map((player) => player.id),
-        ...scoreModal.teamB.map((player) => player.id),
-      ])
+    const needsQueueOrderRebuild = isOpenRotation || isSplitStayRandom
+    let queueOrderMap = null
+    if (needsQueueOrderRebuild) {
+      const matchPlayerIdSet = new Set(allMatchPlayerIds)
       const nonMatchPlayers = players
-        .filter((player) => !matchPlayerIds.has(player.id))
+        .filter((player) => !matchPlayerIdSet.has(player.id))
         .slice()
         .sort((a, b) => (a.queueOrder ?? 0) - (b.queueOrder ?? 0))
-      const allMatchPlayers = [...scoreModal.teamA, ...scoreModal.teamB]
       const matchWinners = allMatchPlayers.filter((player) =>
         winnerIds.has(player.id)
       )
@@ -2075,9 +2101,9 @@ function App() {
         (player) => !winnerIds.has(player.id)
       )
       const rebuiltOrder = [...nonMatchPlayers, ...matchWinners, ...matchLosers]
-      openRotationOrderMap = new Map()
+      queueOrderMap = new Map()
       rebuiltOrder.forEach((player, index) => {
-        openRotationOrderMap.set(player.id, index + 1)
+        queueOrderMap.set(player.id, index + 1)
       })
     }
 
@@ -2086,8 +2112,8 @@ function App() {
         const isTeamA = scoreModal.teamA.some((member) => member.id === player.id)
         const isTeamB = scoreModal.teamB.some((member) => member.id === player.id)
         const queueOrderUpdate =
-          isOpenRotation && openRotationOrderMap?.has(player.id)
-            ? { queueOrder: openRotationOrderMap.get(player.id) }
+          needsQueueOrderRebuild && queueOrderMap?.has(player.id)
+            ? { queueOrder: queueOrderMap.get(player.id) }
             : {}
 
         if (!isTeamA && !isTeamB) {
@@ -2100,14 +2126,16 @@ function App() {
         const isWinner = winnerIds.has(player.id)
         const nextWinStreak = isWinner ? (player.winStreak ?? 0) + 1 : 0
         const nextGames = gamesPlayed + 1
+        // Split & Stay: winners stay on the SAME court for one more match
+        // (capped at 2 wins in a row). Open Rotation never holds.
         const staysOnCourt = isOpenRotation
           ? false
           : isSplitStayRandom
             ? isWinner && nextWinStreak < 2
             : isWinner && nextWinStreak < 2 && nextGames <= maxGamesForHold
-        // Open Rotation never stays on court but still preserves the streak
-        // value so the engine can classify the player as a winner or loser
-        // when picking from the Winners/Losers queues next round.
+        // Open Rotation preserves winStreak so the engine can classify W/L
+        // next round; everyone else only keeps it while still staying on
+        // court.
         const normalizedWinStreak = isOpenRotation
           ? nextWinStreak
           : staysOnCourt
@@ -2180,13 +2208,27 @@ function App() {
         PLAYERS_PER_COURT,
         visibleCourtCount * PLAYERS_PER_COURT
       )
-      const recentMatchPlayerIds = [
-        ...scoreModal.teamA.map((player) => player.id),
-        ...scoreModal.teamB.map((player) => player.id),
-      ]
       setOpenRotationCooldownIds((prev) =>
-        buildOpenRotationCooldown(prev, recentMatchPlayerIds, cooldownSize)
+        buildRollingMatchCooldown(prev, allMatchPlayerIds, cooldownSize)
       )
+    }
+
+    if (isSplitStayRandom) {
+      // Rolling cooldown for losers + capped winners (anyone returning to
+      // the queue this round). Stay-on-court winners skip cooldown — they
+      // remain in courtHolds[courtIndex] for the next round.
+      const returningIds = allMatchPlayerIds.filter(
+        (id) => !eligibleWinnerIds.has(id)
+      )
+      if (returningIds.length > 0) {
+        const cooldownSize = Math.max(
+          PLAYERS_PER_COURT,
+          visibleCourtCount * PLAYERS_PER_COURT
+        )
+        setSplitStayCooldownIds((prev) =>
+          buildRollingMatchCooldown(prev, returningIds, cooldownSize)
+        )
+      }
     }
 
     setCourtMatchups((prev) =>
