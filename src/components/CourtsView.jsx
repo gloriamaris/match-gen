@@ -13,7 +13,7 @@ const getGridClasses = (visibleCount) => {
   if (visibleCount <= 1) return 'grid gap-6 grid-cols-1'
   if (visibleCount === 2) return 'grid gap-6 md:grid-cols-2'
   if (visibleCount === 3) return 'grid gap-6 md:grid-cols-2 xl:grid-cols-3'
-  return 'grid gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'
+  return 'grid gap-6 md:grid-cols-2 xl:grid-cols-3'
 }
 
 export default function CourtsView({
