@@ -239,6 +239,37 @@ const INITIAL_ASSIGNMENT_METRICS = {
   poolOrderScore: Infinity,
 }
 
+const isDualFreshAssignment = (metrics) =>
+  metrics.freshCount === 2 && !metrics.hasRepeatOpponents
+
+// Tier 1: fresh partners and fresh opponents. Tier 2: fresh opponents only.
+// Tier 3: soft scoring among all candidates (always non-empty when inputs allow).
+const selectBestFromCandidates = (candidates) => {
+  if (candidates.length === 0) return null
+
+  const dualFresh = candidates.filter(({ metrics }) => isDualFreshAssignment(metrics))
+  const opponentFresh = candidates.filter(({ metrics }) => !metrics.hasRepeatOpponents)
+
+  const pool =
+    dualFresh.length > 0
+      ? dualFresh
+      : opponentFresh.length > 0
+        ? opponentFresh
+        : candidates
+
+  let best = null
+  let bestMetrics = { ...INITIAL_ASSIGNMENT_METRICS }
+
+  pool.forEach(({ metrics, value }) => {
+    if (isBetterAssignment(metrics, bestMetrics)) {
+      bestMetrics = metrics
+      best = value
+    }
+  })
+
+  return best
+}
+
 const isBetterAssignment = (next, best) => {
   if (next.hasRepeatOpponents !== best.hasRepeatOpponents) {
     return !next.hasRepeatOpponents
@@ -323,24 +354,19 @@ const playersInTier = (source, winner1, winner2, priority) =>
 const findBestPartnerPair = (winner1, winner2, pool) => {
   if (pool.length < 2) return null
 
-  let bestPartner1 = null
-  let bestPartner2 = null
-  let bestMetrics = { ...INITIAL_ASSIGNMENT_METRICS }
+  const candidates = []
 
   for (let i = 0; i < pool.length; i += 1) {
     for (let j = 0; j < pool.length; j += 1) {
       if (i === j) continue
-      const metrics = assignmentMetrics(winner1, pool[i], winner2, pool[j])
-      if (isBetterAssignment(metrics, bestMetrics)) {
-        bestMetrics = metrics
-        bestPartner1 = pool[i]
-        bestPartner2 = pool[j]
-      }
+      candidates.push({
+        metrics: assignmentMetrics(winner1, pool[i], winner2, pool[j]),
+        value: { partner1: pool[i], partner2: pool[j] },
+      })
     }
   }
 
-  if (!bestPartner1 || !bestPartner2) return null
-  return { partner1: bestPartner1, partner2: bestPartner2 }
+  return selectBestFromCandidates(candidates)
 }
 
 const buildTieredPartnerPool = (rested, onCooldown, winner1, winner2) => {
@@ -388,9 +414,8 @@ const findSingleWinnerPartners = (winner, rested, onCooldown) => {
   const pool = [...rested, ...onCooldown]
   if (pool.length < 3) return null
 
-  let bestAssignment = null
-  let bestMetrics = { ...INITIAL_ASSIGNMENT_METRICS }
   const restedIds = new Set(rested.map((player) => player.id))
+  const candidates = []
 
   for (let partnerIndex = 0; partnerIndex < pool.length; partnerIndex += 1) {
     const partner = pool[partnerIndex]
@@ -400,26 +425,24 @@ const findSingleWinnerPartners = (winner, rested, onCooldown) => {
       for (let j = i + 1; j < remaining.length; j += 1) {
         const opponent1 = remaining[i]
         const opponent2 = remaining[j]
-        const metrics = courtCompositionMetrics(
-          [winner, partner],
-          [opponent1, opponent2],
-          {
-            restedScore:
-              (restedIds.has(partner.id) ? 0 : 1) +
-              (restedIds.has(opponent1.id) ? 0 : 1) +
-              (restedIds.has(opponent2.id) ? 0 : 1),
-          }
-        )
-
-        if (isBetterAssignment(metrics, bestMetrics)) {
-          bestMetrics = metrics
-          bestAssignment = { partner, opponent1, opponent2 }
-        }
+        candidates.push({
+          metrics: courtCompositionMetrics(
+            [winner, partner],
+            [opponent1, opponent2],
+            {
+              restedScore:
+                (restedIds.has(partner.id) ? 0 : 1) +
+                (restedIds.has(opponent1.id) ? 0 : 1) +
+                (restedIds.has(opponent2.id) ? 0 : 1),
+            }
+          ),
+          value: { partner, opponent1, opponent2 },
+        })
       }
     }
   }
 
-  return bestAssignment
+  return selectBestFromCandidates(candidates)
 }
 
 // -----------------------------------------------------------------------------
@@ -431,9 +454,9 @@ const findSingleWinnerPartners = (winner, rested, onCooldown) => {
 // Supports 2 winners (split onto opposing teams, each gets a new partner) or
 // 1 winner (placed on team A with a partner; 2 opponents fill team B).
 //
-// Partner selection prefers fresh partners, then lowest prior-partner counts,
-// then mixed doubles, skill proximity, and games played. Repeats only when the
-// expanded queue cannot offer a better assignment.
+// Partner selection uses tiered diversity: dual-fresh (partners + opponents) when
+// possible, then fresh opponents with repeat partners allowed, then soft scoring.
+// Repeats only when the expanded queue cannot offer a better assignment.
 
 const generateCourtAfterScore = (allPlayers, options = {}) => {
   const {
@@ -540,10 +563,10 @@ function generateFallbackCourtByPriority(allPlayers, options = {}) {
   const starterRank = skillRankOf(starter.skillLevel)
 
   const cooldownIds = getCooldownIds(matchHistory, courts)
-  const candidates = sorted.filter((p) => p.id !== starter.id)
+  const poolCandidates = sorted.filter((p) => p.id !== starter.id)
 
-  const rested = candidates.filter((p) => !cooldownIds.has(p.id))
-  const onCooldown = candidates.filter((p) => cooldownIds.has(p.id))
+  const rested = poolCandidates.filter((p) => !cooldownIds.has(p.id))
+  const onCooldown = poolCandidates.filter((p) => cooldownIds.has(p.id))
 
   const sameSkillRested = rested.filter(
     (p) => skillRankOf(p.skillLevel) === starterRank
@@ -577,10 +600,7 @@ function generateFallbackCourtByPriority(allPlayers, options = {}) {
       ? sameGroupPool
       : orderedPool
 
-  let bestPartner = null
-  let bestOpponent1 = null
-  let bestOpponent2 = null
-  let bestMetrics = { ...INITIAL_ASSIGNMENT_METRICS }
+  const candidates = []
 
   for (let partnerIndex = 0; partnerIndex < searchPool.length; partnerIndex += 1) {
     const partner = searchPool[partnerIndex]
@@ -598,31 +618,28 @@ function generateFallbackCourtByPriority(allPlayers, options = {}) {
           (cooldownIds.has(partner.id) ? 1 : 0) +
           (cooldownIds.has(opponent1.id) ? 1 : 0) +
           (cooldownIds.has(opponent2.id) ? 1 : 0)
-        const metrics = courtCompositionMetrics(
-          [starter, partner],
-          [opponent1, opponent2],
-          {
-            poolOrderScore,
-            restedScore,
-            starterPartnerOnCooldown: cooldownIds.has(partner.id) ? 1 : 0,
-          }
-        )
-
-        if (isBetterAssignment(metrics, bestMetrics)) {
-          bestMetrics = metrics
-          bestPartner = partner
-          bestOpponent1 = opponent1
-          bestOpponent2 = opponent2
-        }
+        candidates.push({
+          metrics: courtCompositionMetrics(
+            [starter, partner],
+            [opponent1, opponent2],
+            {
+              poolOrderScore,
+              restedScore,
+              starterPartnerOnCooldown: cooldownIds.has(partner.id) ? 1 : 0,
+            }
+          ),
+          value: { partner, opponent1, opponent2 },
+        })
       }
     }
   }
 
-  if (!bestPartner || !bestOpponent1 || !bestOpponent2) return null
+  const assignment = selectBestFromCandidates(candidates)
+  if (!assignment) return null
 
   return {
-    teamA: [starter, bestPartner],
-    teamB: [bestOpponent1, bestOpponent2],
+    teamA: [starter, assignment.partner],
+    teamB: [assignment.opponent1, assignment.opponent2],
   }
 }
 

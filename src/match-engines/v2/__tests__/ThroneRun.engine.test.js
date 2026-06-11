@@ -664,6 +664,90 @@ describe('Throne Run: rotation and partner selection', () => {
     expect(teamBIds).not.toContain('O1')
     expect(nextCourt.teamA.map((player) => player.id)).toContain('P2')
   })
+
+  it('TR-DUAL-001: prefers dual-fresh court over repeat partner with fresh opponents', () => {
+    const players = [
+      makePlayer('W1', {
+        skillLevel: 'Novice',
+        partnerCounts: { P1: 1 },
+        opponentCounts: { O1: 1 },
+      }),
+      makePlayer('P1', { skillLevel: 'Novice', partnerCounts: { W1: 1 } }),
+      makePlayer('P2', { skillLevel: 'Novice' }),
+      makePlayer('O1', { skillLevel: 'Novice', opponentCounts: { W1: 1 } }),
+      makePlayer('O2', { skillLevel: 'Novice' }),
+      makePlayer('O3', { skillLevel: 'Novice' }),
+    ]
+
+    const nextCourt = generateCourtAfterScore(players, {
+      winnerIds: ['W1'],
+      courts: 1,
+    })
+
+    expect(nextCourt.teamA.map((player) => player.id)).toContain('P2')
+    expect(nextCourt.teamA.map((player) => player.id)).not.toContain('P1')
+    expect(nextCourt.teamB.map((player) => player.id)).not.toContain('O1')
+  })
+
+  it('TR-DUAL-002: prefers opponent-fresh tier when dual-fresh pool is empty', () => {
+    const players = [
+      makePlayer('W1', {
+        skillLevel: 'Novice',
+        partnerCounts: { P1: 1, P2: 1 },
+        opponentCounts: { O1: 1, O2: 1 },
+      }),
+      makePlayer('P1', {
+        skillLevel: 'Novice',
+        partnerCounts: { W1: 1, P2: 1 },
+      }),
+      makePlayer('P2', {
+        skillLevel: 'Novice',
+        partnerCounts: { W1: 1, P1: 1 },
+      }),
+      makePlayer('O1', { skillLevel: 'Novice', opponentCounts: { W1: 1 } }),
+      makePlayer('O2', { skillLevel: 'Novice', opponentCounts: { W1: 1 } }),
+      makePlayer('O3', { skillLevel: 'Novice' }),
+    ]
+
+    const nextCourt = generateCourtAfterScore(players, {
+      winnerIds: ['W1'],
+      courts: 1,
+    })
+
+    const teamBIds = nextCourt.teamB.map((player) => player.id)
+    expect(teamBIds).toContain('O3')
+    expect(teamBIds).not.toContain('O1')
+  })
+
+  it('TR-DUAL-003: still generates a court when only soft-fallback assignments exist', () => {
+    const players = [
+      makePlayer('W1', {
+        skillLevel: 'Novice',
+        partnerCounts: { P1: 1 },
+        opponentCounts: { O1: 1 },
+      }),
+      makePlayer('P1', { skillLevel: 'Novice', partnerCounts: { W1: 1 } }),
+      makePlayer('O1', {
+        skillLevel: 'Novice',
+        opponentCounts: { W1: 1 },
+        partnerCounts: { O2: 1 },
+      }),
+      makePlayer('O2', {
+        skillLevel: 'Novice',
+        partnerCounts: { O1: 1 },
+        opponentCounts: { W1: 1 },
+      }),
+    ]
+
+    const nextCourt = generateCourtAfterScore(players, {
+      winnerIds: ['W1'],
+      courts: 1,
+    })
+
+    expect(nextCourt).not.toBeNull()
+    expect(nextCourt.teamA).toHaveLength(2)
+    expect(nextCourt.teamB).toHaveLength(2)
+  })
 })
 
 describe('Throne Run: cooldown, fallback, and multi-court guards', () => {
