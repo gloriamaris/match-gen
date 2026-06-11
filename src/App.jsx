@@ -2937,7 +2937,7 @@ function App() {
                 Player Name
                 <input
                   type="text"
-                  placeholder="e.g. Jordan Smith"
+                  placeholder="e.g. Happy Pickler"
                   value={formValues.name}
                   onChange={(event) =>
                     setFormValues((prev) => ({
