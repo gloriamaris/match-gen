@@ -3,9 +3,11 @@ import { toJpeg, toPng } from 'html-to-image'
 import {
   generateMatches,
   applyMatchResult,
+  revertMatchResult,
 } from '../../match-engines/v2/ProgressivePlay.engine'
 import {
   applyMatchResult as trApplyMatchResult,
+  revertMatchResult as trRevertMatchResult,
   generateCourtAfterScore,
   generateFallbackCourtByPriority,
   selectPrimaryThroneWinner,
@@ -650,6 +652,86 @@ export default function AppV2() {
     saveV2MatchHistory(nextHistory)
   }
 
+  const handleEditMatch = ({
+    matchId,
+    court,
+    teamAIds,
+    teamBIds,
+    scoreA,
+    scoreB,
+    enteredBy,
+  }) => {
+    const matchIndex = matchHistory.findIndex((match) => match.id === matchId)
+    if (matchIndex === -1) return
+
+    const oldMatch = matchHistory[matchIndex]
+    const winningTeam = scoreA > scoreB ? 'A' : 'B'
+    const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
+    const useThroneRunEngine =
+      isThroneRun &&
+      (oldMatch.ejectedWinnerIds != null || oldMatch.courtIndex != null)
+
+    let updatedPlayers = useThroneRunEngine
+      ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
+      : revertMatchResult(players, oldMatch)
+
+    let historyEntry
+    let ejectedWinnerIds
+
+    if (useThroneRunEngine) {
+      const result = trApplyMatchResult(
+        updatedPlayers,
+        {
+          courtIndex: oldMatch.courtIndex,
+          teamAIds,
+          teamBIds,
+          winningTeam,
+        },
+        { maxWinStreak: winStreak }
+      )
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
+      ejectedWinnerIds = result.ejectedWinnerIds
+    } else {
+      const result = applyMatchResult(updatedPlayers, {
+        courtIndex: oldMatch.courtIndex ?? null,
+        teamAIds,
+        teamBIds,
+        winningTeam,
+      })
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
+    }
+
+    setPlayers(updatedPlayers)
+    saveV2Players(updatedPlayers)
+
+    const byId = new Map(players.map((player) => [player.id, player]))
+    const teamAName = teamAIds
+      .map((id) => byId.get(id)?.name ?? id)
+      .join(' / ')
+    const teamBName = teamBIds
+      .map((id) => byId.get(id)?.name ?? id)
+      .join(' / ')
+
+    const enrichedEntry = {
+      ...historyEntry,
+      id: matchId,
+      court,
+      teamA: teamAName,
+      teamB: teamBName,
+      score: `${scoreA} - ${scoreB}`,
+      enteredBy,
+      timestamp: oldMatch.timestamp ?? historyEntry.timestamp,
+      ...(useThroneRunEngine ? { ejectedWinnerIds } : {}),
+    }
+
+    const nextHistory = [...matchHistory]
+    nextHistory[matchIndex] = enrichedEntry
+    setMatchHistory(nextHistory)
+    saveV2MatchHistory(nextHistory)
+  }
+
   // -- Exports --------------------------------------------------------------
 
   const exportTableAsPdf = (title, tableRef, filename) => {
@@ -941,6 +1023,7 @@ export default function AppV2() {
             matchHistory={matchHistory}
             players={players}
             onAddMatch={handleAddManualMatch}
+            onEditMatch={handleEditMatch}
             historyTableRef={historyTableRef}
             exportMenuOpen={exportMenuOpen}
             setExportMenuOpen={setExportMenuOpen}

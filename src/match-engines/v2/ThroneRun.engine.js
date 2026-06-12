@@ -15,6 +15,7 @@
 import {
   generateMatches,
   applyMatchResult as ppApplyMatchResult,
+  revertMatchResult as ppRevertMatchResult,
   skillRankOf,
   skillGroupOf,
   shiftSkillLevel,
@@ -110,6 +111,35 @@ const applyMatchResult = (players, result, options = {}) => {
   }
 
   return { players: nextPlayers, historyEntry, ejectedWinnerIds }
+}
+
+const revertMatchResult = (players, result, options = {}) => {
+  const { maxWinStreak = 0 } = options
+  const { teamAIds, teamBIds, winningTeam } = result
+  const winnerIdSet = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
+
+  return ppRevertMatchResult(players, result).map((player) => {
+    if (![...teamAIds, ...teamBIds].includes(player.id)) return player
+
+    const updated = { ...player }
+    if (!winnerIdSet.has(player.id)) return updated
+
+    const streak = Number(updated.currentWinStreak) || 0
+    if (
+      maxWinStreak > 0 &&
+      streak === 0 &&
+      (Number(updated.medals) || 0) > 0
+    ) {
+      updated.medals = Math.max(0, (Number(updated.medals) || 0) - 1)
+      updated.currentWinStreak = maxWinStreak - 1
+      updated.medalCooldownCourt = null
+      updated.medalCooldownRemaining = 0
+    } else {
+      updated.currentWinStreak = Math.max(0, streak - 1)
+    }
+
+    return updated
+  })
 }
 
 // -----------------------------------------------------------------------------
@@ -650,6 +680,7 @@ function generateFallbackCourtByPriority(allPlayers, options = {}) {
 export {
   generateMatches,
   applyMatchResult,
+  revertMatchResult,
   generateCourtAfterScore,
   generateFallbackCourtByPriority,
   selectPrimaryThroneWinner,

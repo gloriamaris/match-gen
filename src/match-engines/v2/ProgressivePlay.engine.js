@@ -917,6 +917,57 @@ const applyMatchResult = (players, result) => {
   return { players: nextPlayers, historyEntry }
 }
 
+const revertMatchResult = (players, result) => {
+  const { teamAIds, teamBIds, winningTeam } = result
+  const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
+  const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
+  const allMatchPlayerIds = [...teamAIds, ...teamBIds]
+
+  return players.map((player) => {
+    if (!allMatchPlayerIds.includes(player.id)) return player
+
+    const isWinner = winnerIds.has(player.id)
+    const updated = { ...player }
+
+    if (isWinner) {
+      updated.wins = Math.max(0, (Number(updated.wins) || 0) - 1)
+      updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+    } else {
+      updated.losses = Math.max(0, (Number(updated.losses) || 0) - 1)
+      updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+    }
+    updated.gamesPlayed = Math.max(0, (Number(updated.gamesPlayed) || 0) - 1)
+
+    const partnerCounts = { ...(updated.partnerCounts ?? {}) }
+    const ownTeam = winnerIds.has(player.id) ? [...winnerIds] : [...loserIds]
+    ownTeam.forEach((id) => {
+      if (id !== player.id) {
+        const nextCount = Math.max(0, (Number(partnerCounts[id]) || 0) - 1)
+        if (nextCount === 0) {
+          delete partnerCounts[id]
+        } else {
+          partnerCounts[id] = nextCount
+        }
+      }
+    })
+    updated.partnerCounts = partnerCounts
+
+    const opponentCountsObj = { ...(updated.opponentCounts ?? {}) }
+    const opposingTeam = winnerIds.has(player.id) ? [...loserIds] : [...winnerIds]
+    opposingTeam.forEach((id) => {
+      const nextCount = Math.max(0, (Number(opponentCountsObj[id]) || 0) - 1)
+      if (nextCount === 0) {
+        delete opponentCountsObj[id]
+      } else {
+        opponentCountsObj[id] = nextCount
+      }
+    })
+    updated.opponentCounts = opponentCountsObj
+
+    return updated
+  })
+}
+
 // -----------------------------------------------------------------------------
 // 12. Exports
 // -----------------------------------------------------------------------------
@@ -953,4 +1004,5 @@ export {
   getCooldownIds,
   generateMatches,
   applyMatchResult,
+  revertMatchResult,
 }

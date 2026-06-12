@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { X } from 'lucide-react'
+import { Pencil, X } from 'lucide-react'
 
 const SCORE_OPTIONS = Array.from({ length: 16 }, (_, i) => i)
 
@@ -21,10 +21,45 @@ const EMPTY_ERRORS = {
   duplicate: '',
 }
 
+const resolveTeamIds = (teamIds, teamName, players) => {
+  if (Array.isArray(teamIds) && teamIds.length === 2) {
+    return teamIds
+  }
+
+  const names = String(teamName ?? '')
+    .split('/')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  while (names.length < 2) {
+    names.push('')
+  }
+
+  return names.map(
+    (name) => players.find((player) => player.name === name)?.id ?? ''
+  )
+}
+
+const matchToForm = (match, players) => {
+  const [rawScoreA = '', rawScoreB = ''] = String(match.score ?? '')
+    .split('-')
+    .map((value) => value.trim())
+
+  return {
+    court: match.court ?? 'Court 1',
+    teamAIds: resolveTeamIds(match.teamAIds, match.teamA, players),
+    teamBIds: resolveTeamIds(match.teamBIds, match.teamB, players),
+    scoreA: rawScoreA,
+    scoreB: rawScoreB,
+    verifiedBy: match.enteredBy ?? '',
+  }
+}
+
 export default function V2HistoryView({
   matchHistory = [],
   players = [],
   onAddMatch,
+  onEditMatch,
   historyTableRef,
   exportMenuOpen,
   setExportMenuOpen,
@@ -32,6 +67,7 @@ export default function V2HistoryView({
   onExportPdf,
 }) {
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingMatchId, setEditingMatchId] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [errors, setErrors] = useState(EMPTY_ERRORS)
 
@@ -50,14 +86,23 @@ export default function V2HistoryView({
       (player) => player.id === currentId || !selectedIds.has(player.id)
     )
 
-  const openModal = () => {
+  const openAddModal = () => {
+    setEditingMatchId(null)
     setForm(EMPTY_FORM)
+    setErrors(EMPTY_ERRORS)
+    setModalOpen(true)
+  }
+
+  const openEditModal = (match) => {
+    setEditingMatchId(match.id ?? null)
+    setForm(matchToForm(match, players))
     setErrors(EMPTY_ERRORS)
     setModalOpen(true)
   }
 
   const closeModal = () => {
     setModalOpen(false)
+    setEditingMatchId(null)
   }
 
   const updateTeamId = (team, slot, value) => {
@@ -89,17 +134,25 @@ export default function V2HistoryView({
 
     if (Object.values(nextErrors).some(Boolean)) return
 
-    onAddMatch?.({
+    const payload = {
       court: form.court.trim(),
       teamAIds,
       teamBIds,
       scoreA,
       scoreB,
       enteredBy: form.verifiedBy.trim(),
-    })
+    }
+
+    if (editingMatchId) {
+      onEditMatch?.({ matchId: editingMatchId, ...payload })
+    } else {
+      onAddMatch?.(payload)
+    }
 
     closeModal()
   }
+
+  const isEditing = Boolean(editingMatchId)
 
   const sortedHistory = [...matchHistory].sort((a, b) =>
     String(a.teamA ?? '').localeCompare(String(b.teamA ?? ''))
@@ -145,7 +198,7 @@ export default function V2HistoryView({
         </div>
         <button
           type="button"
-          onClick={openModal}
+          onClick={openAddModal}
           className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
         >
           Add match
@@ -162,6 +215,7 @@ export default function V2HistoryView({
               <th className="px-4 py-3">Team B</th>
               <th className="px-4 py-3">Score</th>
               <th className="px-4 py-3">Verified</th>
+              <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
@@ -169,7 +223,7 @@ export default function V2HistoryView({
               <tr>
                 <td
                   className="px-4 py-6 text-center text-sm text-slate-500"
-                  colSpan={6}
+                  colSpan={7}
                 >
                   No games recorded yet.
                 </td>
@@ -205,6 +259,16 @@ export default function V2HistoryView({
                     </td>
                     <td className="px-4 py-3">{scoreString || '—'}</td>
                     <td className="px-4 py-3">{match.enteredBy || '—'}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(match)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                        aria-label={`Edit match on ${match.court ?? 'court'}`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </td>
                   </tr>
                 )
               })
@@ -223,7 +287,7 @@ export default function V2HistoryView({
           <div className="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-lg">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-900">
-                Manual Match Entry
+                {isEditing ? 'Edit Match' : 'Manual Match Entry'}
               </h2>
               <button
                 type="button"
@@ -392,7 +456,7 @@ export default function V2HistoryView({
                   type="submit"
                   className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 hover:shadow-md"
                 >
-                  Add match
+                  {isEditing ? 'Save changes' : 'Add match'}
                 </button>
               </div>
             </form>

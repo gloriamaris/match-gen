@@ -1,18 +1,18 @@
 import React from 'react'
 import { X } from 'lucide-react'
 
-const WIN_RATE_DECIMALS = 0
 const MIN_ROWS = 8
+const MAX_ROWS = 10
 
-const formatWinRate = (player) => {
-  const totalGames =
-    Number(player.gamesPlayed) > 0
-      ? Number(player.gamesPlayed)
-      : Number(player.wins) + Number(player.losses)
-
-  if (!totalGames) return '0%'
-  const rawWinRate = (Number(player.wins) / totalGames) * 100
-  return `${rawWinRate.toFixed(WIN_RATE_DECIMALS)}%`
+const WinsLossesRecord = ({ player }) => {
+  const wins = Number(player.wins) || 0
+  const losses = Number(player.losses) || 0
+  return (
+    <>
+      <span className="font-bold">{wins}W</span>
+      {` / ${losses}L`}
+    </>
+  )
 }
 
 export default function ShareStandingsModal({
@@ -36,7 +36,7 @@ export default function ShareStandingsModal({
 
   const shareCardRef = React.useRef(null)
   const [saveMenuOpen, setSaveMenuOpen] = React.useState(false)
-  const rows = [...standings]
+  const rows = [...standings].slice(0, MAX_ROWS)
   while (rows.length < MIN_ROWS) {
     rows.push(null)
   }
@@ -73,11 +73,11 @@ export default function ShareStandingsModal({
         <div className="mt-4 flex flex-col gap-4 lg:flex-row">
           <div
             ref={shareCardRef}
-            className="mx-auto w-full max-w-md rounded-[2.5rem] border border-slate-300 bg-[#F4F5F0] shadow-sm"
+            className="mx-auto w-full max-w-md rounded-[2.5rem] border border-slate-300 bg-white shadow-sm"
           >
-            <div className="overflow-hidden rounded-[2rem] border border-slate-300 bg-[#F4F5F0]">
+            <div className="overflow-hidden rounded-[2rem] border border-slate-300 bg-white">
               <div
-                className="relative h-44 border-b border-slate-400 bg-[#F4F5F0]"
+                className="relative h-44 border-b border-slate-400 bg-white"
                 style={
                   coverPhotoSrc
                     ? {
@@ -89,7 +89,7 @@ export default function ShareStandingsModal({
                 }
               >
                 <div
-                  className="absolute bottom-0 left-1/2 h-24 w-24 -translate-x-1/2 translate-y-1/2 rounded-full border border-slate-400 bg-[#F4F5F0]"
+                  className="absolute bottom-0 left-1/2 h-24 w-24 -translate-x-1/2 translate-y-1/2 rounded-full border border-slate-400 bg-white"
                   style={
                     primaryPhotoSrc
                       ? {
@@ -120,7 +120,7 @@ export default function ShareStandingsModal({
                         <th className="w-[56%] border-r border-slate-400 px-2 py-3">
                           {nameColumnLabel}
                         </th>
-                        <th className="w-[26%] px-2 py-3 text-center">Win Rate</th>
+                        <th className="w-[26%] px-2 py-3 text-center">Record</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -145,7 +145,7 @@ export default function ShareStandingsModal({
                           <td
                             className="h-9 border-t border-slate-300 px-2 py-2 text-center"
                           >
-                            {player ? formatWinRate(player) : ''}
+                            {player ? <WinsLossesRecord player={player} /> : ''}
                           </td>
                         </tr>
                       ))}
