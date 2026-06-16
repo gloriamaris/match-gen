@@ -861,26 +861,42 @@ const generateMatches = (players, options = {}) => {
 // 11. Public API: applyMatchResult
 // -----------------------------------------------------------------------------
 
-const applyMatchResult = (players, result) => {
+const applyMatchResult = (players, result, options = {}) => {
+  const { skillAdjustment = 1 } = options
+  const adj = Math.max(1, Number(skillAdjustment) || 1)
   const { courtIndex, teamAIds, teamBIds, winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
   const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
   const allMatchPlayerIds = [...teamAIds, ...teamBIds]
 
+  const skillChanges = {}
   const nextPlayers = players.map((player) => {
     if (!allMatchPlayerIds.includes(player.id)) return player
 
     const isWinner = winnerIds.has(player.id)
     const updated = { ...player }
+    const previousSkillLevel = player.skillLevel
 
     if (isWinner) {
       updated.wins = (Number(updated.wins) || 0) + 1
-      updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+      if (updated.wins % adj === 0) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+      }
     } else {
       updated.losses = (Number(updated.losses) || 0) + 1
-      updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+      if (updated.losses % adj === 0) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+      }
     }
     updated.gamesPlayed = (Number(updated.gamesPlayed) || 0) + 1
+
+    if (updated.skillLevel !== previousSkillLevel) {
+      skillChanges[player.id] = {
+        from: previousSkillLevel,
+        to: updated.skillLevel,
+        direction: isWinner ? 'up' : 'down',
+      }
+    }
 
     // Update partner counts
     const partnerCounts = { ...(updated.partnerCounts ?? {}) }
@@ -912,12 +928,15 @@ const applyMatchResult = (players, result) => {
     winningTeam,
     signature: matchSignature(teamAIds, teamBIds),
     timestamp: Date.now(),
+    skillChanges,
   }
 
   return { players: nextPlayers, historyEntry }
 }
 
-const revertMatchResult = (players, result) => {
+const revertMatchResult = (players, result, options = {}) => {
+  const { skillAdjustment = 1 } = options
+  const adj = Math.max(1, Number(skillAdjustment) || 1)
   const { teamAIds, teamBIds, winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
   const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
@@ -930,11 +949,17 @@ const revertMatchResult = (players, result) => {
     const updated = { ...player }
 
     if (isWinner) {
-      updated.wins = Math.max(0, (Number(updated.wins) || 0) - 1)
-      updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+      const oldWins = Number(updated.wins) || 0
+      if (oldWins > 0 && oldWins % adj === 0) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+      }
+      updated.wins = Math.max(0, oldWins - 1)
     } else {
-      updated.losses = Math.max(0, (Number(updated.losses) || 0) - 1)
-      updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+      const oldLosses = Number(updated.losses) || 0
+      if (oldLosses > 0 && oldLosses % adj === 0) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+      }
+      updated.losses = Math.max(0, oldLosses - 1)
     }
     updated.gamesPlayed = Math.max(0, (Number(updated.gamesPlayed) || 0) - 1)
 

@@ -2,6 +2,7 @@ import React from 'react'
 import V2CourtsSection from './V2CourtsSection'
 import V2GameModeSection from './V2GameModeSection'
 import V2GameTypeSection from './V2GameTypeSection'
+import V2SkillAdjustmentSection from './V2SkillAdjustmentSection'
 import V2WinStreakSection from './V2WinStreakSection'
 import { V2_GAME_TYPES } from './v2Storage'
 
@@ -10,6 +11,7 @@ export default function V2GameSetupPage({
   gameMode,
   numberOfCourts,
   winStreak,
+  skillAdjustment,
   sessionStarted,
   isStartingSession,
   isEndingSession,
@@ -17,6 +19,7 @@ export default function V2GameSetupPage({
   onSelectGameMode,
   onSelectNumberOfCourts,
   onSelectWinStreak,
+  onSelectSkillAdjustment,
   onStartSession,
   onEndSession,
 }) {
@@ -56,6 +59,13 @@ export default function V2GameSetupPage({
           onSelectNumberOfCourts={onSelectNumberOfCourts}
           disabled={selectionDisabled}
         />
+        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+          <V2SkillAdjustmentSection
+            skillAdjustment={skillAdjustment}
+            onSelectSkillAdjustment={onSelectSkillAdjustment}
+            disabled={selectionDisabled}
+          />
+        ) : null}
         {gameType === V2_GAME_TYPES.THRONE_RUN ? (
           <V2WinStreakSection
             winStreak={winStreak}

@@ -2,7 +2,6 @@ import React, { useRef } from 'react'
 import { Check, Pencil, RefreshCw } from 'lucide-react'
 import {
   getCooldownIds,
-  PLAYERS_PER_COURT,
   selectFairnessPool,
   shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
@@ -103,29 +102,6 @@ const getTeamSkillStars = (teamPlayers) => {
   return SKILL_STARS_BY_LEVEL[highestSkillLevel] ?? SKILL_STARS_BY_LEVEL.beginner
 }
 
-const groupPlayersIntoMatchFours = (playerList, { courtLabels = [] } = {}) => {
-  if (playerList.length === 0) return []
-
-  const groups = []
-  for (let index = 0; index < playerList.length; index += PLAYERS_PER_COURT) {
-    const players = playerList.slice(index, index + PLAYERS_PER_COURT)
-    const groupIndex = Math.floor(index / PLAYERS_PER_COURT)
-    const label =
-      players.length < PLAYERS_PER_COURT
-        ? 'On deck'
-        : courtLabels[groupIndex] ?? `Match ${groupIndex + 1}`
-
-    groups.push({
-      skillLevel: `match-${groupIndex}`,
-      label,
-      stars: getTeamSkillStars(players),
-      players,
-    })
-  }
-
-  return groups
-}
-
 function V2PlayerStatusGroups({
   groups,
   groupHeadingClassName,
@@ -134,25 +110,30 @@ function V2PlayerStatusGroups({
 }) {
   return (
     <div className="mt-2 space-y-3">
-      {groups.map((group) => (
-        <div key={group.skillLevel}>
-          <p
-            className={`text-[11px] font-semibold uppercase tracking-wide ${groupHeadingClassName}`}
-          >
-            {group.label} {group.stars}
-          </p>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {group.players.map((player) => (
-              <span key={player.id} className={chipClassName}>
-                {player.name}
-                <span className={gamesClassName}>
-                  ({Number(player.gamesPlayed) || 0})
+      {groups.map((group) => {
+        const hasHeading = Boolean(group.label) || Boolean(group.stars)
+        return (
+          <div key={group.skillLevel}>
+            {hasHeading ? (
+              <p
+                className={`text-[11px] font-semibold uppercase tracking-wide ${groupHeadingClassName}`}
+              >
+                {group.label} {group.stars}
+              </p>
+            ) : null}
+            <div className={`${hasHeading ? 'mt-1.5 ' : ''}flex flex-wrap gap-1.5`}>
+              {group.players.map((player) => (
+                <span key={player.id} className={chipClassName}>
+                  {player.name}
+                  <span className={gamesClassName}>
+                    ({Number(player.gamesPlayed) || 0})
+                  </span>
                 </span>
-              </span>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -204,17 +185,10 @@ export default function V2CourtsView({
           cooldownSlots: numberOfCourts,
         })
       : { selected: [] }
-  const emptyCourtLabels = (courtMatchups ?? [])
-    .map((matchup, index) =>
-      matchup?.teamA?.length && matchup?.teamB?.length ? null : `Court ${index + 1}`
-    )
-    .filter(Boolean)
-  const liveUpNextGroups =
-    gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
-      ? groupPlayersIntoMatchFours(liveUpNextPlayers, {
-          courtLabels: emptyCourtLabels,
-        })
-      : groupPlayersBySkillLevelInPickOrder(liveUpNextPlayers, liveUpNextPlayers)
+  const liveUpNextGroups = groupPlayersBySkillLevelInPickOrder(
+    liveUpNextPlayers,
+    liveUpNextPlayers
+  )
 
   const upNextSnapshotRef = useRef({
     players: liveUpNextPlayers,
@@ -244,6 +218,25 @@ export default function V2CourtsView({
   const winnersCount = new Set([...playersWithMedals, ...playersOnWinStreak].map((p) => p.id)).size
   const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
   const showUpNextSection = upNextPlayers.length > 0
+
+  const playerNameById = new Map(players.map((p) => [p.id, p.name]))
+  const latestMatch = matchHistory.length > 0 ? matchHistory[matchHistory.length - 1] : null
+  const latestSkillMovements = latestMatch?.skillChanges
+    ? Object.entries(latestMatch.skillChanges)
+        .map(([playerId, change]) => ({
+          id: playerId,
+          name: playerNameById.get(playerId) ?? 'Unknown player',
+          fromLevel: change.from,
+          toLevel: change.to,
+          direction: change.direction,
+        }))
+        .sort((a, b) => {
+          if (a.direction !== b.direction) {
+            return a.direction === 'up' ? -1 : 1
+          }
+          return a.name.localeCompare(b.name)
+        })
+    : []
 
   const courts = Array.from({ length: numberOfCourts }, (_, index) => {
     const matchup = courtMatchups?.[index] ?? null
@@ -348,7 +341,7 @@ export default function V2CourtsView({
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500">
                   {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
-                    ? 'Grouped by upcoming match — excludes players currently on court'
+                    ? 'Grouped by skill level, ordered by fairness priority — excludes players currently on court'
                     : 'Prioritized for the next refresh — excludes players currently on court'}
                 </p>
               </div>
@@ -494,6 +487,62 @@ export default function V2CourtsView({
               )}
             </div>
           </div>
+        </section>
+      ) : null}
+
+      {latestSkillMovements.length > 0 ? (
+        <section
+          aria-labelledby="skill-movements-heading"
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+        >
+          <div className="border-b border-slate-200 px-4 py-3 sm:px-5">
+            <h2
+              id="skill-movements-heading"
+              className="text-sm font-semibold text-slate-900"
+            >
+              Skill Movements ({latestSkillMovements.length})
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Changes from the most recent scored match.
+            </p>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {latestSkillMovements.map((movement) => {
+              const fromKey = normalizeSkillLevel(movement.fromLevel)
+              const toKey = normalizeSkillLevel(movement.toLevel)
+              const fromStars = SKILL_STARS_BY_LEVEL[fromKey] ?? movement.fromLevel
+              const toStars = SKILL_STARS_BY_LEVEL[toKey] ?? movement.toLevel
+              const isUp = movement.direction === 'up'
+              return (
+                <li
+                  key={movement.id}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-3 text-sm sm:px-5"
+                >
+                  <span className="font-medium text-slate-800">
+                    {movement.name}
+                  </span>
+                  <span className="text-slate-500">from</span>
+                  <span aria-label={`from ${getSkillLabel(movement.fromLevel)}`}>
+                    {fromStars}
+                  </span>
+                  <span className="text-slate-500">to</span>
+                  <span aria-label={`to ${getSkillLabel(movement.toLevel)}`}>
+                    {toStars}
+                  </span>
+                  <span
+                    className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      isUp
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-rose-50 text-rose-700'
+                    }`}
+                    aria-label={isUp ? 'Moved up' : 'Moved down'}
+                  >
+                    {isUp ? '⬆️ Up' : '⬇️ Down'}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
         </section>
       ) : null}
 

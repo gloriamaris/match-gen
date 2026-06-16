@@ -42,12 +42,14 @@ const applyMatchResult = (players, result, options = {}) => {
   const allMatchPlayerIds = [...teamAIds, ...teamBIds]
 
   let ejectedWinnerIds = []
+  const skillChanges = {}
 
   const nextPlayers = players.map((player) => {
     if (!allMatchPlayerIds.includes(player.id)) return player
 
     const isWinner = winnerIdSet.has(player.id)
     const updated = { ...player }
+    const previousSkillLevel = player.skillLevel
 
     if (isWinner) {
       updated.wins = (Number(updated.wins) || 0) + 1
@@ -68,6 +70,14 @@ const applyMatchResult = (players, result, options = {}) => {
       updated.currentWinStreak = 0
     }
     updated.gamesPlayed = (Number(updated.gamesPlayed) || 0) + 1
+
+    if (updated.skillLevel !== previousSkillLevel) {
+      skillChanges[player.id] = {
+        from: previousSkillLevel,
+        to: updated.skillLevel,
+        direction: isWinner ? 'up' : 'down',
+      }
+    }
 
     const partnerCounts = { ...(updated.partnerCounts ?? {}) }
     const ownTeam = winnerIdSet.has(player.id) ? [...winnerIdSet] : [...loserIdSet]
@@ -108,6 +118,7 @@ const applyMatchResult = (players, result, options = {}) => {
     winningTeam,
     signature: matchSignature(teamAIds, teamBIds),
     timestamp: Date.now(),
+    skillChanges,
   }
 
   return { players: nextPlayers, historyEntry, ejectedWinnerIds }

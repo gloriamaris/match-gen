@@ -5,6 +5,7 @@ export const V2_STORAGE_KEYS = {
   gameMode: `${V2_STORAGE_PREFIX}gameMode`,
   courts: `${V2_STORAGE_PREFIX}courts`,
   winStreak: `${V2_STORAGE_PREFIX}winStreak`,
+  skillAdjustment: `${V2_STORAGE_PREFIX}skillAdjustment`,
   sessionStarted: `${V2_STORAGE_PREFIX}sessionStarted`,
   sessionId: `${V2_STORAGE_PREFIX}sessionId`,
   players: `${V2_STORAGE_PREFIX}players`,
@@ -21,6 +22,7 @@ export const DEFAULT_V2_GAME_TYPE = V2_GAME_TYPES.PROGRESSIVE_PLAY
 export const DEFAULT_V2_GAME_MODE = 'doubles'
 export const DEFAULT_V2_COURTS = 2
 export const DEFAULT_V2_WIN_STREAK = 0
+export const DEFAULT_V2_SKILL_ADJUSTMENT = 1
 
 export const V2_TEAM_COLOR_CLASSES = [
   'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -123,12 +125,28 @@ export function saveV2WinStreak(winStreak) {
   window.localStorage.setItem(V2_STORAGE_KEYS.winStreak, String(winStreak))
 }
 
-export function persistV2Session({ gameType, gameMode, courts, winStreak }) {
+export function loadV2SkillAdjustment() {
+  const stored = Number(window.localStorage.getItem(V2_STORAGE_KEYS.skillAdjustment))
+  if (!Number.isInteger(stored) || stored < 1 || stored > 5) {
+    return DEFAULT_V2_SKILL_ADJUSTMENT
+  }
+  return stored
+}
+
+export function saveV2SkillAdjustment(skillAdjustment) {
+  window.localStorage.setItem(V2_STORAGE_KEYS.skillAdjustment, String(skillAdjustment))
+}
+
+export function persistV2Session({ gameType, gameMode, courts, winStreak, skillAdjustment }) {
   const sessionId = createUniqueId('session')
   window.localStorage.setItem(V2_STORAGE_KEYS.gameType, gameType)
   window.localStorage.setItem(V2_STORAGE_KEYS.gameMode, gameMode)
   window.localStorage.setItem(V2_STORAGE_KEYS.courts, String(courts))
   window.localStorage.setItem(V2_STORAGE_KEYS.winStreak, String(winStreak))
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.skillAdjustment,
+    String(skillAdjustment ?? DEFAULT_V2_SKILL_ADJUSTMENT)
+  )
   window.localStorage.setItem(V2_STORAGE_KEYS.sessionStarted, 'true')
   window.localStorage.setItem(V2_STORAGE_KEYS.sessionId, sessionId)
   return sessionId

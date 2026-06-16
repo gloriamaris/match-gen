@@ -37,12 +37,14 @@ import {
   DEFAULT_V2_COURTS,
   DEFAULT_V2_GAME_MODE,
   DEFAULT_V2_GAME_TYPE,
+  DEFAULT_V2_SKILL_ADJUSTMENT,
   DEFAULT_V2_WIN_STREAK,
   V2_GAME_TYPES,
   loadV2CourtMatchups,
   loadV2Courts,
   loadV2GameMode,
   loadV2GameType,
+  loadV2SkillAdjustment,
   loadV2WinStreak,
   loadV2MatchHistory,
   loadV2Players,
@@ -51,6 +53,7 @@ import {
   saveV2CourtMatchups,
   saveV2MatchHistory,
   saveV2Players,
+  saveV2SkillAdjustment,
   saveV2WinStreak,
 } from './v2Storage'
 
@@ -114,6 +117,7 @@ export default function AppV2() {
   const [gameMode, setGameMode] = useState(loadV2GameMode)
   const [numberOfCourts, setNumberOfCourts] = useState(loadV2Courts)
   const [winStreak, setWinStreak] = useState(loadV2WinStreak)
+  const [skillAdjustment, setSkillAdjustment] = useState(loadV2SkillAdjustment)
   const [isStartingSession, setIsStartingSession] = useState(false)
   const [isEndingSession, setIsEndingSession] = useState(false)
   const startTimeoutRef = useRef(null)
@@ -233,6 +237,11 @@ export default function AppV2() {
   }, [winStreak])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    saveV2SkillAdjustment(skillAdjustment)
+  }, [skillAdjustment])
+
+  useEffect(() => {
     if (!toastMessage) return
     const timer = window.setTimeout(() => {
       setToastMessage('')
@@ -253,6 +262,7 @@ export default function AppV2() {
         gameMode,
         courts: numberOfCourts,
         winStreak,
+        skillAdjustment,
       })
       setSessionStarted(true)
       setActiveView('players')
@@ -271,6 +281,7 @@ export default function AppV2() {
       setGameMode(DEFAULT_V2_GAME_MODE)
       setNumberOfCourts(DEFAULT_V2_COURTS)
       setWinStreak(DEFAULT_V2_WIN_STREAK)
+      setSkillAdjustment(DEFAULT_V2_SKILL_ADJUSTMENT)
       setPlayers([])
       setCourtMatchups(null)
       setMatchHistory([])
@@ -605,7 +616,8 @@ export default function AppV2() {
     } else {
       const result = applyMatchResult(
         players,
-        { courtIndex, teamAIds, teamBIds, winningTeam }
+        { courtIndex, teamAIds, teamBIds, winningTeam },
+        { skillAdjustment }
       )
       updatedPlayers = result.players
       historyEntry = result.historyEntry
@@ -671,7 +683,8 @@ export default function AppV2() {
 
     const { players: updatedPlayers, historyEntry } = applyMatchResult(
       players,
-      { courtIndex: null, teamAIds, teamBIds, winningTeam }
+      { courtIndex: null, teamAIds, teamBIds, winningTeam },
+      { skillAdjustment }
     )
 
     setPlayers(updatedPlayers)
@@ -720,7 +733,7 @@ export default function AppV2() {
 
     let updatedPlayers = useThroneRunEngine
       ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
-      : revertMatchResult(players, oldMatch)
+      : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     let historyEntry
     let ejectedWinnerIds
@@ -740,12 +753,16 @@ export default function AppV2() {
       historyEntry = result.historyEntry
       ejectedWinnerIds = result.ejectedWinnerIds
     } else {
-      const result = applyMatchResult(updatedPlayers, {
-        courtIndex: oldMatch.courtIndex ?? null,
-        teamAIds,
-        teamBIds,
-        winningTeam,
-      })
+      const result = applyMatchResult(
+        updatedPlayers,
+        {
+          courtIndex: oldMatch.courtIndex ?? null,
+          teamAIds,
+          teamBIds,
+          winningTeam,
+        },
+        { skillAdjustment }
+      )
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     }
@@ -1012,9 +1029,17 @@ export default function AppV2() {
         }
       >
         {pageTitle ? (
-          <h1 className="mb-6 text-xl font-semibold text-slate-900 sm:text-2xl">
-            {pageTitle}
-          </h1>
+          <div className="mb-6">
+            <h1 className="text-xl font-semibold text-slate-900 sm:text-2xl">
+              {pageTitle}
+            </h1>
+            {activeView === 'courts' &&
+            gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+              <label className="mt-2 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Skill Adjustment: {skillAdjustment}
+              </label>
+            ) : null}
+          </div>
         ) : null}
         {activeView === 'setup' ? (
           <V2GameSetupPage
@@ -1022,6 +1047,7 @@ export default function AppV2() {
             gameMode={gameMode}
             numberOfCourts={numberOfCourts}
             winStreak={winStreak}
+            skillAdjustment={skillAdjustment}
             sessionStarted={sessionStarted}
             isStartingSession={isStartingSession}
             isEndingSession={isEndingSession}
@@ -1029,6 +1055,7 @@ export default function AppV2() {
             onSelectGameMode={setGameMode}
             onSelectNumberOfCourts={setNumberOfCourts}
             onSelectWinStreak={setWinStreak}
+            onSelectSkillAdjustment={setSkillAdjustment}
             onStartSession={handleStartSession}
             onEndSession={handleEndSession}
           />
