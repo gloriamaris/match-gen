@@ -1,10 +1,12 @@
-import React from 'react'
+import React, { useRef } from 'react'
 import { Check, Pencil, RefreshCw } from 'lucide-react'
 import {
   getCooldownIds,
+  PLAYERS_PER_COURT,
   selectFairnessPool,
   shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
+import { V2_GAME_TYPES } from './v2Storage'
 
 const SKILL_RANK = {
   beginner: 0,
@@ -86,6 +88,44 @@ const groupPlayersBySkillLevelInPickOrder = (playerList, pickOrderPlayers) => {
   }).filter((group) => group.players.length > 0)
 }
 
+const getTeamSkillStars = (teamPlayers) => {
+  if (!Array.isArray(teamPlayers) || teamPlayers.length === 0) {
+    return SKILL_STARS_BY_LEVEL.beginner
+  }
+
+  const highestSkillLevel = teamPlayers.reduce((currentHighest, player) => {
+    const candidateLevel = normalizeSkillLevel(player?.skillLevel)
+    const candidateRank = SKILL_RANK[candidateLevel] ?? SKILL_RANK.beginner
+    const currentRank = SKILL_RANK[currentHighest] ?? SKILL_RANK.beginner
+    return candidateRank > currentRank ? candidateLevel : currentHighest
+  }, 'beginner')
+
+  return SKILL_STARS_BY_LEVEL[highestSkillLevel] ?? SKILL_STARS_BY_LEVEL.beginner
+}
+
+const groupPlayersIntoMatchFours = (playerList, { courtLabels = [] } = {}) => {
+  if (playerList.length === 0) return []
+
+  const groups = []
+  for (let index = 0; index < playerList.length; index += PLAYERS_PER_COURT) {
+    const players = playerList.slice(index, index + PLAYERS_PER_COURT)
+    const groupIndex = Math.floor(index / PLAYERS_PER_COURT)
+    const label =
+      players.length < PLAYERS_PER_COURT
+        ? 'On deck'
+        : courtLabels[groupIndex] ?? `Match ${groupIndex + 1}`
+
+    groups.push({
+      skillLevel: `match-${groupIndex}`,
+      label,
+      stars: getTeamSkillStars(players),
+      players,
+    })
+  }
+
+  return groups
+}
+
 function V2PlayerStatusGroups({
   groups,
   groupHeadingClassName,
@@ -117,28 +157,15 @@ function V2PlayerStatusGroups({
   )
 }
 
-const getTeamSkillStars = (teamPlayers) => {
-  if (!Array.isArray(teamPlayers) || teamPlayers.length === 0) {
-    return SKILL_STARS_BY_LEVEL.beginner
-  }
-
-  const highestSkillLevel = teamPlayers.reduce((currentHighest, player) => {
-    const candidateLevel = normalizeSkillLevel(player?.skillLevel)
-    const candidateRank = SKILL_RANK[candidateLevel] ?? SKILL_RANK.beginner
-    const currentRank = SKILL_RANK[currentHighest] ?? SKILL_RANK.beginner
-    return candidateRank > currentRank ? candidateLevel : currentHighest
-  }, 'beginner')
-
-  return SKILL_STARS_BY_LEVEL[highestSkillLevel] ?? SKILL_STARS_BY_LEVEL.beginner
-}
-
 export default function V2CourtsView({
+  gameType,
   numberOfCourts,
   courtMatchups,
   players = [],
   matchHistory = [],
   checkedInCount = 0,
   winStreak = 0,
+  lockUpNext = false,
   onGenerateCourt = noop,
   onEditCourt = noop,
   onOpenScore = noop,
@@ -170,17 +197,41 @@ export default function V2CourtsView({
 
   const eligiblePlayers = checkedInPlayers.filter((p) => !onCourtIds.has(p.id))
   const useCheckInOrder = shouldUseCheckInOrder(eligiblePlayers, matchHistory)
-  const { selected: upNextPlayers } =
+  const { selected: liveUpNextPlayers } =
     eligiblePlayers.length >= 4
       ? selectFairnessPool(eligiblePlayers, numberOfCourts, matchHistory, {
           useCheckInOrder,
           cooldownSlots: numberOfCourts,
         })
       : { selected: [] }
-  const upNextGroups = groupPlayersBySkillLevelInPickOrder(
-    upNextPlayers,
-    upNextPlayers
-  )
+  const emptyCourtLabels = (courtMatchups ?? [])
+    .map((matchup, index) =>
+      matchup?.teamA?.length && matchup?.teamB?.length ? null : `Court ${index + 1}`
+    )
+    .filter(Boolean)
+  const liveUpNextGroups =
+    gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
+      ? groupPlayersIntoMatchFours(liveUpNextPlayers, {
+          courtLabels: emptyCourtLabels,
+        })
+      : groupPlayersBySkillLevelInPickOrder(liveUpNextPlayers, liveUpNextPlayers)
+
+  const upNextSnapshotRef = useRef({
+    players: liveUpNextPlayers,
+    groups: liveUpNextGroups,
+  })
+  if (!lockUpNext) {
+    upNextSnapshotRef.current = {
+      players: liveUpNextPlayers,
+      groups: liveUpNextGroups,
+    }
+  }
+  const upNextPlayers = lockUpNext
+    ? upNextSnapshotRef.current.players
+    : liveUpNextPlayers
+  const upNextGroups = lockUpNext
+    ? upNextSnapshotRef.current.groups
+    : liveUpNextGroups
 
   const playersWithMedals = checkedInPlayers
     .filter((p) => (Number(p.medals) || 0) > 0)
@@ -191,6 +242,8 @@ export default function V2CourtsView({
     .sort((a, b) => (Number(b.currentWinStreak) || 0) - (Number(a.currentWinStreak) || 0) || a.name.localeCompare(b.name))
 
   const winnersCount = new Set([...playersWithMedals, ...playersOnWinStreak].map((p) => p.id)).size
+  const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
+  const showUpNextSection = upNextPlayers.length > 0
 
   const courts = Array.from({ length: numberOfCourts }, (_, index) => {
     const matchup = courtMatchups?.[index] ?? null
@@ -275,9 +328,13 @@ export default function V2CourtsView({
         ))}
       </div>
 
-      {!notEnoughPlayers ? (
-        <div className="mt-20 grid gap-6 md:grid-cols-2">
-          {upNextPlayers.length > 0 ? (
+      {!notEnoughPlayers && (showUpNextSection || showWinnersSection) ? (
+        <div
+          className={`mt-20 grid gap-6 ${
+            showUpNextSection && showWinnersSection ? 'md:grid-cols-2' : ''
+          }`}
+        >
+          {showUpNextSection ? (
             <section
               aria-labelledby="up-next-heading"
               className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm"
@@ -290,7 +347,9 @@ export default function V2CourtsView({
                   Up Next ({upNextPlayers.length})
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Prioritized for the next refresh — excludes players currently on court
+                  {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
+                    ? 'Grouped by upcoming match — excludes players currently on court'
+                    : 'Prioritized for the next refresh — excludes players currently on court'}
                 </p>
               </div>
               <div className="p-4 sm:p-5">
@@ -304,68 +363,70 @@ export default function V2CourtsView({
             </section>
           ) : null}
 
-          <section
-            aria-labelledby="winners-heading"
-            className="overflow-hidden rounded-2xl border border-yellow-300 bg-white shadow-sm"
-          >
-            <div className="border-b border-yellow-300 px-4 py-3 sm:px-5">
-              <h2
-                id="winners-heading"
-                className="text-sm font-semibold text-slate-900"
-              >
-                Winners 🎉 ({winnersCount})
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Players on a {winStreak}-win streak
-              </p>
-            </div>
-            <div className="space-y-4 p-4 sm:p-5">
-              <div>
-                <h3 className="mb-1.5 text-xs font-semibold text-yellow-700">
-                  Medals ({playersWithMedals.length})
-                </h3>
-                {playersWithMedals.length === 0 ? (
-                  <p className="text-sm text-yellow-600">No medals yet.</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {playersWithMedals.map((player) => (
-                      <span
-                        key={player.id}
-                        className="inline-flex items-center rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800"
-                      >
-                        {player.name}
-                        <span className="ml-1" aria-hidden="true">
-                          {'🥇'.repeat(Number(player.medals) || 0)}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
+          {showWinnersSection ? (
+            <section
+              aria-labelledby="winners-heading"
+              className="overflow-hidden rounded-2xl border border-yellow-300 bg-white shadow-sm"
+            >
+              <div className="border-b border-yellow-300 px-4 py-3 sm:px-5">
+                <h2
+                  id="winners-heading"
+                  className="text-sm font-semibold text-slate-900"
+                >
+                  Winners 🎉 ({winnersCount})
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Players on a {winStreak}-win streak
+                </p>
               </div>
-              <div>
-                <h3 className="mb-1.5 text-xs font-semibold text-yellow-700">
-                  Win Streaks ({playersOnWinStreak.length})
-                </h3>
-                {playersOnWinStreak.length === 0 ? (
-                  <p className="text-sm text-yellow-600">No active win streaks.</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {playersOnWinStreak.map((player) => (
-                      <span
-                        key={player.id}
-                        className="inline-flex items-center rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800"
-                      >
-                        {player.name}
-                        <span className="ml-1 font-normal text-yellow-600">
-                          🔥{player.currentWinStreak}
+              <div className="space-y-4 p-4 sm:p-5">
+                <div>
+                  <h3 className="mb-1.5 text-xs font-semibold text-yellow-700">
+                    Medals ({playersWithMedals.length})
+                  </h3>
+                  {playersWithMedals.length === 0 ? (
+                    <p className="text-sm text-yellow-600">No medals yet.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {playersWithMedals.map((player) => (
+                        <span
+                          key={player.id}
+                          className="inline-flex items-center rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800"
+                        >
+                          {player.name}
+                          <span className="ml-1" aria-hidden="true">
+                            {'🥇'.repeat(Number(player.medals) || 0)}
+                          </span>
                         </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <h3 className="mb-1.5 text-xs font-semibold text-yellow-700">
+                    Win Streaks ({playersOnWinStreak.length})
+                  </h3>
+                  {playersOnWinStreak.length === 0 ? (
+                    <p className="text-sm text-yellow-600">No active win streaks.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {playersOnWinStreak.map((player) => (
+                        <span
+                          key={player.id}
+                          className="inline-flex items-center rounded-lg border border-yellow-300 bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800"
+                        >
+                          {player.name}
+                          <span className="ml-1 font-normal text-yellow-600">
+                            🔥{player.currentWinStreak}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          ) : null}
         </div>
       ) : null}
 

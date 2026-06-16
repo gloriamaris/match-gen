@@ -3,6 +3,7 @@ import V2CourtsSection from './V2CourtsSection'
 import V2GameModeSection from './V2GameModeSection'
 import V2GameTypeSection from './V2GameTypeSection'
 import V2WinStreakSection from './V2WinStreakSection'
+import { V2_GAME_TYPES } from './v2Storage'
 
 export default function V2GameSetupPage({
   gameType,
@@ -55,11 +56,13 @@ export default function V2GameSetupPage({
           onSelectNumberOfCourts={onSelectNumberOfCourts}
           disabled={selectionDisabled}
         />
-        <V2WinStreakSection
-          winStreak={winStreak}
-          onSelectWinStreak={onSelectWinStreak}
-          disabled={selectionDisabled}
-        />
+        {gameType === V2_GAME_TYPES.THRONE_RUN ? (
+          <V2WinStreakSection
+            winStreak={winStreak}
+            onSelectWinStreak={onSelectWinStreak}
+            disabled={selectionDisabled}
+          />
+        ) : null}
       </div>
     </div>
   )

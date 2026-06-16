@@ -4,6 +4,9 @@ import {
   generateMatches,
   applyMatchResult,
   revertMatchResult,
+  PLAYERS_PER_COURT,
+  selectFairnessPool,
+  shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
 import {
   applyMatchResult as trApplyMatchResult,
@@ -119,6 +122,7 @@ export default function AppV2() {
   const [players, setPlayers] = useState(() => loadV2Players())
   const [courtMatchups, setCourtMatchups] = useState(() => loadV2CourtMatchups())
   const [matchHistory, setMatchHistory] = useState(() => loadV2MatchHistory())
+  const [isUpNextLocked, setIsUpNextLocked] = useState(false)
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
     courtIndex: null,
@@ -270,6 +274,7 @@ export default function AppV2() {
       setPlayers([])
       setCourtMatchups(null)
       setMatchHistory([])
+      setIsUpNextLocked(false)
       setActiveView('setup')
       setIsEndingSession(false)
       endTimeoutRef.current = null
@@ -297,6 +302,8 @@ export default function AppV2() {
     ) {
       return
     }
+
+    setIsUpNextLocked(false)
 
     try {
       const currentPlayers = loadV2Players()
@@ -403,13 +410,52 @@ export default function AppV2() {
       }
 
       if (!generatedCourt) {
-        const result = generateMatches(effectivePlayers, {
-          courts: 1,
-          cooldownCourts: numberOfCourts,
-          matchHistory,
-          excludePlayerIds: otherCourtPlayerIds,
-        })
-        generatedCourt = result.courts[0] ?? null
+        if (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY) {
+          const onCourtIds = new Set()
+          ;(courtMatchups ?? []).forEach((matchup) => {
+            if (!matchup) return
+            matchup.teamA?.forEach((player) => onCourtIds.add(player.id))
+            matchup.teamB?.forEach((player) => onCourtIds.add(player.id))
+          })
+          const eligibleForCourt = currentPlayers.filter(
+            (player) => player.checkedIn && !onCourtIds.has(player.id)
+          )
+          const useCheckInOrderForRefresh = shouldUseCheckInOrder(
+            eligibleForCourt,
+            matchHistory
+          )
+          const { selected: fairnessPool } =
+            eligibleForCourt.length >= PLAYERS_PER_COURT
+              ? selectFairnessPool(
+                  eligibleForCourt,
+                  numberOfCourts,
+                  matchHistory,
+                  {
+                    useCheckInOrder: useCheckInOrderForRefresh,
+                    cooldownSlots: numberOfCourts,
+                  }
+                )
+              : { selected: [] }
+          const preferredPlayers = fairnessPool.slice(0, PLAYERS_PER_COURT)
+
+          if (preferredPlayers.length === PLAYERS_PER_COURT) {
+            const preferredResult = generateMatches(preferredPlayers, {
+              courts: 1,
+              matchHistory,
+            })
+            generatedCourt = preferredResult.courts[0] ?? null
+          }
+        }
+
+        if (!generatedCourt) {
+          const result = generateMatches(effectivePlayers, {
+            courts: 1,
+            cooldownCourts: numberOfCourts,
+            matchHistory,
+            excludePlayerIds: otherCourtPlayerIds,
+          })
+          generatedCourt = result.courts[0] ?? null
+        }
       }
 
       if (!generatedCourt) {
@@ -613,6 +659,7 @@ export default function AppV2() {
 
     setCourtMatchups(nextMatchups)
     saveV2CourtMatchups(nextMatchups)
+    setIsUpNextLocked(true)
 
     handleCloseScore()
   }
@@ -988,12 +1035,14 @@ export default function AppV2() {
         ) : activeView === 'courts' ? (
           <>
             <V2CourtsView
+              gameType={gameType}
               numberOfCourts={numberOfCourts}
               courtMatchups={courtMatchups}
               players={players}
               matchHistory={matchHistory}
               checkedInCount={checkedInCount}
               winStreak={winStreak}
+              lockUpNext={isUpNextLocked}
               onGenerateCourt={handleGenerateCourt}
               onEditCourt={handleOpenEditCourt}
               onOpenScore={handleOpenScore}
