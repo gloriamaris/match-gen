@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { generateMatches } from '../ProgressivePlay.engine'
+import {
+  generateMatches,
+  generateStrictSkillCourt,
+  skillRankOf,
+} from '../ProgressivePlay.engine'
 import {
   generateCourtAfterScore,
   generateFallbackCourtByPriority,
@@ -406,5 +410,69 @@ describe('generateFallbackCourtByPriority', () => {
 
     expect(court.teamA[1].id).toBe('female')
     expect(court.teamB.map((player) => player.id).sort()).toEqual(['female2', 'male'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Strict-mode regression: same scenario where the legacy fallback mixes
+// skill levels, generateStrictSkillCourt must not.
+// ---------------------------------------------------------------------------
+
+describe('strict skill mode vs legacy fallback', () => {
+  it('legacy fallback returns a cross-level court for a mixed pool', () => {
+    const players = [
+      makePlayer('i1', { skillLevel: 'Intermediate', gamesPlayed: 0 }),
+      makePlayer('i2', { skillLevel: 'Intermediate', gamesPlayed: 2 }),
+      makePlayer('b1', { skillLevel: 'Beginner', gamesPlayed: 2 }),
+      makePlayer('b2', { skillLevel: 'Beginner', gamesPlayed: 2 }),
+    ]
+    const court = generateFallbackCourtByPriority(players, {
+      courtIndex: 0,
+      courtMatchups: [null],
+      matchHistory: [],
+      courts: 1,
+    })
+    expect(court).not.toBeNull()
+    const ranks = [...court.teamA, ...court.teamB].map((p) =>
+      skillRankOf(p.skillLevel)
+    )
+    expect(new Set(ranks).size).toBeGreaterThan(1)
+  })
+
+  it('strict builder never produces a cross-level court for the same pool', () => {
+    const players = [
+      makePlayer('i1', { skillLevel: 'Intermediate', gamesPlayed: 0 }),
+      makePlayer('i2', { skillLevel: 'Intermediate', gamesPlayed: 2 }),
+      makePlayer('b1', { skillLevel: 'Beginner', gamesPlayed: 2 }),
+      makePlayer('b2', { skillLevel: 'Beginner', gamesPlayed: 2 }),
+    ]
+    const court = generateStrictSkillCourt(players, {
+      matchHistory: [],
+      courts: 1,
+    })
+    expect(court).toBeNull()
+  })
+
+  it('strict builder picks the lowest-games same-level group when one exists', () => {
+    const players = [
+      makePlayer('i1', { skillLevel: 'Intermediate', gamesPlayed: 3 }),
+      makePlayer('i2', { skillLevel: 'Intermediate', gamesPlayed: 3 }),
+      makePlayer('i3', { skillLevel: 'Intermediate', gamesPlayed: 3 }),
+      makePlayer('i4', { skillLevel: 'Intermediate', gamesPlayed: 3 }),
+      makePlayer('b1', { skillLevel: 'Beginner', gamesPlayed: 0 }),
+      makePlayer('b2', { skillLevel: 'Beginner', gamesPlayed: 1 }),
+      makePlayer('b3', { skillLevel: 'Beginner', gamesPlayed: 1 }),
+      makePlayer('b4', { skillLevel: 'Beginner', gamesPlayed: 1 }),
+    ]
+    const court = generateStrictSkillCourt(players, {
+      matchHistory: [],
+      courts: 2,
+    })
+    expect(court).not.toBeNull()
+    const ranks = [...court.teamA, ...court.teamB].map((p) =>
+      skillRankOf(p.skillLevel)
+    )
+    expect(new Set(ranks).size).toBe(1)
+    expect(ranks[0]).toBe(skillRankOf('Beginner'))
   })
 })

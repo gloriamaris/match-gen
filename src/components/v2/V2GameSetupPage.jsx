@@ -1,4 +1,5 @@
 import React from 'react'
+import V2AdjacentSkillMixingSection from './V2AdjacentSkillMixingSection'
 import V2CourtsSection from './V2CourtsSection'
 import V2GameModeSection from './V2GameModeSection'
 import V2GameTypeSection from './V2GameTypeSection'
@@ -12,6 +13,7 @@ export default function V2GameSetupPage({
   numberOfCourts,
   winStreak,
   skillAdjustment,
+  allowAdjacentSkillMixing,
   sessionStarted,
   isStartingSession,
   isEndingSession,
@@ -20,6 +22,7 @@ export default function V2GameSetupPage({
   onSelectNumberOfCourts,
   onSelectWinStreak,
   onSelectSkillAdjustment,
+  onToggleAdjacentSkillMixing,
   onStartSession,
   onEndSession,
 }) {
@@ -59,6 +62,13 @@ export default function V2GameSetupPage({
           onSelectNumberOfCourts={onSelectNumberOfCourts}
           disabled={selectionDisabled}
         />
+        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+          <V2AdjacentSkillMixingSection
+            allowAdjacentSkillMixing={allowAdjacentSkillMixing}
+            onToggleAdjacentSkillMixing={onToggleAdjacentSkillMixing}
+            disabled={selectionDisabled}
+          />
+        ) : null}
         {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
           <V2SkillAdjustmentSection
             skillAdjustment={skillAdjustment}

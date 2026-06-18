@@ -8,6 +8,7 @@ export default function V2EditCourtModal({
   currentTeamA = [],
   currentTeamB = [],
   checkedInPlayers = [],
+  allowAdjacentSkillMixing = true,
   onClose,
   onSubmit,
 }) {
@@ -67,16 +68,22 @@ export default function V2EditCourtModal({
     const teamAPlayers = getSelectedPlayers(filteredA)
     const teamBPlayers = getSelectedPlayers(filteredB)
 
+    const teamsCannotPlay =
+      teamAPlayers.length === 2 &&
+      teamBPlayers.length === 2 &&
+      !canPlayerGroupsOpponents(teamAPlayers, teamBPlayers, {
+        allowAdjacent: allowAdjacentSkillMixing,
+      })
+
     const nextErrors = {
       teamA: filteredA.length === 2 ? '' : 'Select two players',
       teamB: filteredB.length === 2 ? '' : 'Select two players',
       duplicate: hasDuplicates ? 'Players can only appear once' : '',
-      skillGroup:
-        teamAPlayers.length === 2 &&
-        teamBPlayers.length === 2 &&
-        !canPlayerGroupsOpponents(teamAPlayers, teamBPlayers)
+      skillGroup: teamsCannotPlay
+        ? allowAdjacentSkillMixing
           ? 'Beginner/Novice teams cannot play Intermediate/Advanced teams'
-          : '',
+          : 'Teams must be the same skill level'
+        : '',
     }
     setErrors(nextErrors)
 

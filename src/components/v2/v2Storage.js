@@ -6,6 +6,7 @@ export const V2_STORAGE_KEYS = {
   courts: `${V2_STORAGE_PREFIX}courts`,
   winStreak: `${V2_STORAGE_PREFIX}winStreak`,
   skillAdjustment: `${V2_STORAGE_PREFIX}skillAdjustment`,
+  allowAdjacentSkillMixing: `${V2_STORAGE_PREFIX}allowAdjacentSkillMixing`,
   sessionStarted: `${V2_STORAGE_PREFIX}sessionStarted`,
   sessionId: `${V2_STORAGE_PREFIX}sessionId`,
   players: `${V2_STORAGE_PREFIX}players`,
@@ -23,6 +24,7 @@ export const DEFAULT_V2_GAME_MODE = 'doubles'
 export const DEFAULT_V2_COURTS = 2
 export const DEFAULT_V2_WIN_STREAK = 0
 export const DEFAULT_V2_SKILL_ADJUSTMENT = 1
+export const DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING = false
 
 export const V2_TEAM_COLOR_CLASSES = [
   'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -137,7 +139,28 @@ export function saveV2SkillAdjustment(skillAdjustment) {
   window.localStorage.setItem(V2_STORAGE_KEYS.skillAdjustment, String(skillAdjustment))
 }
 
-export function persistV2Session({ gameType, gameMode, courts, winStreak, skillAdjustment }) {
+export function loadV2AllowAdjacentSkillMixing() {
+  const stored = window.localStorage.getItem(V2_STORAGE_KEYS.allowAdjacentSkillMixing)
+  if (stored === 'true') return true
+  if (stored === 'false') return false
+  return DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING
+}
+
+export function saveV2AllowAdjacentSkillMixing(value) {
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.allowAdjacentSkillMixing,
+    value ? 'true' : 'false'
+  )
+}
+
+export function persistV2Session({
+  gameType,
+  gameMode,
+  courts,
+  winStreak,
+  skillAdjustment,
+  allowAdjacentSkillMixing,
+}) {
   const sessionId = createUniqueId('session')
   window.localStorage.setItem(V2_STORAGE_KEYS.gameType, gameType)
   window.localStorage.setItem(V2_STORAGE_KEYS.gameMode, gameMode)
@@ -146,6 +169,12 @@ export function persistV2Session({ gameType, gameMode, courts, winStreak, skillA
   window.localStorage.setItem(
     V2_STORAGE_KEYS.skillAdjustment,
     String(skillAdjustment ?? DEFAULT_V2_SKILL_ADJUSTMENT)
+  )
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.allowAdjacentSkillMixing,
+    (allowAdjacentSkillMixing ?? DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING)
+      ? 'true'
+      : 'false'
   )
   window.localStorage.setItem(V2_STORAGE_KEYS.sessionStarted, 'true')
   window.localStorage.setItem(V2_STORAGE_KEYS.sessionId, sessionId)

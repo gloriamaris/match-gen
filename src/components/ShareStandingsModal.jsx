@@ -15,6 +15,11 @@ const WinsLossesRecord = ({ player }) => {
   )
 }
 
+const formatOppStrength = (player) => {
+  const pd = Number(player?.pointDifferential) || 0
+  return `${pd}%`
+}
+
 export default function ShareStandingsModal({
   isOpen,
   onClose,
@@ -73,7 +78,7 @@ export default function ShareStandingsModal({
         <div className="mt-4 flex flex-col gap-4 lg:flex-row">
           <div
             ref={shareCardRef}
-            className="mx-auto w-full max-w-md rounded-[2.5rem] border border-slate-300 bg-white shadow-sm"
+            className="mx-auto w-full max-w-lg rounded-[2.5rem] border border-slate-300 bg-white shadow-sm"
           >
             <div className="overflow-hidden rounded-[2rem] border border-slate-300 bg-white">
               <div
@@ -114,13 +119,18 @@ export default function ShareStandingsModal({
                   <table className="w-full table-fixed text-left text-xs text-slate-700">
                     <thead className="bg-emerald-600 text-[11px] font-semibold uppercase tracking-wide text-white">
                       <tr>
-                        <th className="w-[18%] border-r border-slate-400 px-2 py-3">
+                        <th className="w-[12%] border-r border-slate-400 px-2 py-3">
                           Rank
                         </th>
-                        <th className="w-[56%] border-r border-slate-400 px-2 py-3">
+                        <th className="w-[48%] border-r border-slate-400 px-2 py-3">
                           {nameColumnLabel}
                         </th>
-                        <th className="w-[26%] px-2 py-3 text-center">Record</th>
+                        <th className="w-[20%] border-r border-slate-400 px-2 py-3 text-center">
+                          Record
+                        </th>
+                        <th className="w-[20%] px-2 py-3 text-center">
+                          Opp Strength
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -136,16 +146,19 @@ export default function ShareStandingsModal({
                               player && index < 4 ? 'font-semibold' : ''
                             }`}
                           >
-                            <span className="block truncate">
+                            <span className="block truncate whitespace-nowrap">
                               {player
                                 ? `${['🥇', '🥈', '🥉', '🏅'][index] ? `${['🥇', '🥈', '🥉', '🏅'][index]} ` : ''}${player.name}`
                                 : ''}
                             </span>
                           </td>
                           <td
-                            className="h-9 border-t border-slate-300 px-2 py-2 text-center"
+                            className="h-9 border-r border-t border-slate-300 px-2 py-2 text-center"
                           >
                             {player ? <WinsLossesRecord player={player} /> : ''}
+                          </td>
+                          <td className="h-9 border-t border-slate-300 px-2 py-2 text-center">
+                            {player ? formatOppStrength(player) : ''}
                           </td>
                         </tr>
                       ))}

@@ -42,6 +42,12 @@ const skillGroupOf = (level) => {
   return rank >= 2 ? 2 : 1
 }
 
+// Bucket key used to partition players/teams for matchmaking. When
+// allowAdjacent is true, returns the legacy two-bucket grouping (1 or 2).
+// When false, returns the raw skill rank (0..3) so each level is isolated.
+const skillBucketOf = (level, { allowAdjacent = true } = {}) =>
+  allowAdjacent ? skillGroupOf(level) : skillRankOf(level)
+
 const canTeamsPlayMatch = (teamA, teamB) =>
   Number(teamA?.skillGroup) === Number(teamB?.skillGroup)
 
@@ -72,13 +78,16 @@ const highestSkillLevel = (players) => {
   return skillLevelFromRank(maxRank)
 }
 
-// Global rule: group 1 (Beginner/Novice) teams never play group 2
-// (Intermediate/Advanced) teams. Applies in Phase 1, Phase 2, and manual edits.
-const teamSkillGroupForPlayers = (players) =>
-  skillGroupOf(highestSkillLevel(players))
+// Global rule: teams of different skill buckets never play each other.
+// In the default (allowAdjacent=true) two-bucket mode that means Beginner/Novice
+// versus Intermediate/Advanced. With allowAdjacent=false each rank is its own
+// bucket, so only same-level teams may play.
+const teamSkillGroupForPlayers = (players, options = {}) =>
+  skillBucketOf(highestSkillLevel(players), options)
 
-const canPlayerGroupsOpponents = (teamAPlayers, teamBPlayers) =>
-  teamSkillGroupForPlayers(teamAPlayers) === teamSkillGroupForPlayers(teamBPlayers)
+const canPlayerGroupsOpponents = (teamAPlayers, teamBPlayers, options = {}) =>
+  teamSkillGroupForPlayers(teamAPlayers, options) ===
+  teamSkillGroupForPlayers(teamBPlayers, options)
 
 const teamPerformanceScore = (players) => {
   if (players.length === 0) return 0
@@ -359,7 +368,7 @@ const generateTeamsForGroup = (players, options = {}) => {
 // -----------------------------------------------------------------------------
 
 const buildTeamUnits = (checkedIn, options = {}) => {
-  const { useCheckInOrder = false } = options
+  const { useCheckInOrder = false, allowAdjacentSkillMixing = true } = options
   const { lockedTeams, remaining } = identifyLockedTeams(checkedIn)
 
   const lockedTeamsOrdered = useCheckInOrder
@@ -370,31 +379,33 @@ const buildTeamUnits = (checkedIn, options = {}) => {
       })
     : lockedTeams
 
-  const group1Players = useCheckInOrder
-    ? sortByCheckInOrder(
-        remaining.filter((p) => skillGroupOf(p.skillLevel) === 1)
-      )
-    : remaining.filter((p) => skillGroupOf(p.skillLevel) === 1)
-  const group2Players = useCheckInOrder
-    ? sortByCheckInOrder(
-        remaining.filter((p) => skillGroupOf(p.skillLevel) === 2)
-      )
-    : remaining.filter((p) => skillGroupOf(p.skillLevel) === 2)
+  const bucketOpts = { allowAdjacent: allowAdjacentSkillMixing }
+  const bucketMap = new Map()
+  remaining.forEach((player) => {
+    const bucketKey = skillBucketOf(player.skillLevel, bucketOpts)
+    if (!bucketMap.has(bucketKey)) bucketMap.set(bucketKey, [])
+    bucketMap.get(bucketKey).push(player)
+  })
 
-  const g1 = generateTeamsForGroup(group1Players, { useCheckInOrder })
-  const g2 = generateTeamsForGroup(group2Players, { useCheckInOrder })
+  const groupResults = []
+  bucketMap.forEach((bucketPlayers) => {
+    const ordered = useCheckInOrder ? sortByCheckInOrder(bucketPlayers) : bucketPlayers
+    groupResults.push(generateTeamsForGroup(ordered, { useCheckInOrder }))
+  })
 
-  // Group 1 (Beginner/Novice) and group 2 (Intermediate/Advanced) pair only
-  // within their own group. Odd leftovers sit out rather than cross-pairing.
-  const sitOutCandidates = [...g1.leftover, ...g2.leftover]
-  const allTeams = [...lockedTeamsOrdered, ...g1.teams, ...g2.teams]
+  // Teams pair only within their own skill bucket. Odd leftovers sit out
+  // rather than cross-pairing across buckets.
+  const sitOutCandidates = groupResults.flatMap((g) => g.leftover)
+  const builtTeams = groupResults.flatMap((g) => g.teams)
+  const allTeams = [...lockedTeamsOrdered, ...builtTeams]
   return { teams: allTeams, sitOuts: sitOutCandidates }
 }
 
-const enrichTeam = (team) => {
+const enrichTeam = (team, options = {}) => {
+  const { allowAdjacentSkillMixing = true } = options
   const skill = highestSkillLevel(team.players)
   const perf = teamPerformanceScore(team.players)
-  const group = skillGroupOf(skill)
+  const group = skillBucketOf(skill, { allowAdjacent: allowAdjacentSkillMixing })
   return { ...team, teamSkillLevel: skill, teamPerformanceScore: perf, skillGroup: group }
 }
 
@@ -403,7 +414,8 @@ const enrichTeam = (team) => {
 // -----------------------------------------------------------------------------
 
 const groupAndBucket = (enrichedTeams) => {
-  const groups = { 1: [], 2: [] }
+  // Group teams by their skill bucket (1/2 in legacy mode, 0-3 in strict mode).
+  const groups = {}
   enrichedTeams.forEach((team) => {
     const g = team.skillGroup
     if (!groups[g]) groups[g] = []
@@ -595,32 +607,35 @@ const assignCourts = (matches, courtCount) => {
 
   const matchSkillGroup = (match) =>
     Math.max(
-      Number(match.teamA.skillGroup) || 1,
-      Number(match.teamB.skillGroup) || 1
+      Number(match.teamA.skillGroup) || 0,
+      Number(match.teamB.skillGroup) || 0
     )
 
-  const group1Matches = []
-  const group2Matches = []
+  // Bin matches by their skill bucket and sort each bin by performance.
+  const matchesByGroup = new Map()
   validMatches.forEach((match) => {
-    if (matchSkillGroup(match) === 1) {
-      group1Matches.push(match)
-      return
-    }
-    group2Matches.push(match)
+    const key = matchSkillGroup(match)
+    if (!matchesByGroup.has(key)) matchesByGroup.set(key, [])
+    matchesByGroup.get(key).push(match)
   })
-  group1Matches.sort(compareByCombinedPerformanceDesc)
-  group2Matches.sort(compareByCombinedPerformanceDesc)
+  matchesByGroup.forEach((list) => list.sort(compareByCombinedPerformanceDesc))
 
-  // Alternate low/high skill groups per court whenever both groups exist:
-  // Court 1 -> Group 1, Court 2 -> Group 2, Court 3 -> Group 1, ...
+  // Alternate across all present skill buckets (ascending) so courts rotate
+  // through low-to-high groups: bucket0 -> bucket1 -> bucket2 -> ...
+  const sortedGroupKeys = [...matchesByGroup.keys()].sort((a, b) => a - b)
   const orderedMatches = []
-  while (group1Matches.length > 0 || group2Matches.length > 0) {
-    if (group1Matches.length > 0) {
-      orderedMatches.push(group1Matches.shift())
-    }
-    if (group2Matches.length > 0) {
-      orderedMatches.push(group2Matches.shift())
-    }
+  let remaining = sortedGroupKeys.reduce(
+    (sum, key) => sum + matchesByGroup.get(key).length,
+    0
+  )
+  while (remaining > 0) {
+    sortedGroupKeys.forEach((key) => {
+      const list = matchesByGroup.get(key)
+      if (list.length > 0) {
+        orderedMatches.push(list.shift())
+        remaining -= 1
+      }
+    })
   }
 
   const courtAssignments = orderedMatches.slice(0, courtCount).map((m, idx) => ({
@@ -793,7 +808,13 @@ const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) =
 // -----------------------------------------------------------------------------
 
 const generateMatches = (players, options = {}) => {
-  const { courts = 2, cooldownCourts, matchHistory = [], excludePlayerIds } = options
+  const {
+    courts = 2,
+    cooldownCourts,
+    matchHistory = [],
+    excludePlayerIds,
+    allowAdjacentSkillMixing = true,
+  } = options
   const checkedIn = (players ?? []).filter((p) => p.checkedIn)
   const excludeIds = new Set(excludePlayerIds ?? [])
 
@@ -833,8 +854,11 @@ const generateMatches = (players, options = {}) => {
 
   const { teams, sitOuts: teamBuildSitOuts } = buildTeamUnits(selected, {
     useCheckInOrder,
+    allowAdjacentSkillMixing,
   })
-  const enriched = teams.map(enrichTeam)
+  const enriched = teams.map((team) =>
+    enrichTeam(team, { allowAdjacentSkillMixing })
+  )
   const buckets = groupAndBucket(enriched)
   const matches = generateMatchesFromBuckets(buckets, matchHistory, {
     useCheckInOrder,
@@ -855,6 +879,110 @@ const generateMatches = (players, options = {}) => {
     _teamBuildSitOuts: teamBuildSitOuts,
     _overflowSitOuts: overflowSitOuts,
   }
+}
+
+// -----------------------------------------------------------------------------
+// 10b. Public API: generateStrictSkillCourt
+// -----------------------------------------------------------------------------
+//
+// Build a single court of four same-rank players when adjacent skill mixing is
+// off. Tries skill ranks ordered by the minimum gamesPlayed among rested
+// (sitting-out) players at that rank, expanding from sitting-out to cooldown
+// only as needed to reach four.
+//
+// Returns a single court { teamA, teamB } or null when no rank can field 4.
+
+const generateStrictSkillCourt = (players, options = {}) => {
+  const {
+    matchHistory = [],
+    courts = 2,
+    excludePlayerIds,
+    preferredPlayerIds,
+    useCheckInOrder = false,
+  } = options
+
+  const excludeIds = new Set(excludePlayerIds ?? [])
+  const preferredIds = new Set(preferredPlayerIds ?? [])
+
+  const available = (players ?? []).filter(
+    (p) => p.checkedIn && !excludeIds.has(p.id)
+  )
+  if (available.length < PLAYERS_PER_COURT) return null
+
+  const cooldownIds = getCooldownIds(matchHistory, courts)
+
+  const byRank = new Map()
+  available.forEach((player) => {
+    const rank = skillRankOf(player.skillLevel)
+    if (!byRank.has(rank)) byRank.set(rank, [])
+    byRank.get(rank).push(player)
+  })
+
+  const rankCandidates = []
+  byRank.forEach((rankPlayers, rank) => {
+    const rested = rankPlayers.filter((p) => !cooldownIds.has(p.id))
+    const onCooldown = rankPlayers.filter((p) => cooldownIds.has(p.id))
+    if (rested.length + onCooldown.length < PLAYERS_PER_COURT) return
+    const minGamesAmongRested = rested.length === 0
+      ? Number.POSITIVE_INFINITY
+      : rested.reduce(
+          (min, p) => Math.min(min, Number(p.gamesPlayed) || 0),
+          Number.POSITIVE_INFINITY
+        )
+    rankCandidates.push({ rank, rested, onCooldown, minGamesAmongRested })
+  })
+
+  rankCandidates.sort((a, b) => {
+    if (a.minGamesAmongRested !== b.minGamesAmongRested) {
+      return a.minGamesAmongRested - b.minGamesAmongRested
+    }
+    if (a.rested.length !== b.rested.length) {
+      return b.rested.length - a.rested.length
+    }
+    return a.rank - b.rank
+  })
+
+  for (const candidate of rankCandidates) {
+    const restedSorted = sortByFairnessPriority(candidate.rested, {
+      useCheckInOrder,
+      cooldownIds,
+    })
+    const cooldownSorted = sortByFairnessPriority(candidate.onCooldown, {
+      useCheckInOrder,
+      cooldownIds,
+    })
+
+    const fourPlayers = []
+    const pickedIds = new Set()
+    const tryAdd = (player) => {
+      if (fourPlayers.length >= PLAYERS_PER_COURT) return
+      if (pickedIds.has(player.id)) return
+      fourPlayers.push(player)
+      pickedIds.add(player.id)
+    }
+
+    if (preferredIds.size > 0) {
+      const preferredAtRank = restedSorted.filter((p) => preferredIds.has(p.id))
+      if (preferredAtRank.length >= PLAYERS_PER_COURT) {
+        preferredAtRank.slice(0, PLAYERS_PER_COURT).forEach(tryAdd)
+      }
+    }
+
+    restedSorted.forEach(tryAdd)
+    cooldownSorted.forEach(tryAdd)
+
+    if (fourPlayers.length < PLAYERS_PER_COURT) continue
+
+    const result = generateMatches(fourPlayers, {
+      courts: 1,
+      matchHistory,
+      allowAdjacentSkillMixing: false,
+    })
+    const court = result.courts[0] ?? null
+    if (court) return court
+  }
+
+  return null
 }
 
 // -----------------------------------------------------------------------------
@@ -1002,6 +1130,7 @@ export {
   PLAYERS_PER_COURT,
   skillRankOf,
   skillGroupOf,
+  skillBucketOf,
   teamSkillGroupForPlayers,
   canTeamsPlayMatch,
   canPlayerGroupsOpponents,
@@ -1028,6 +1157,7 @@ export {
   selectFairnessPool,
   getCooldownIds,
   generateMatches,
+  generateStrictSkillCourt,
   applyMatchResult,
   revertMatchResult,
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { toJpeg, toPng } from 'html-to-image'
 import {
   generateMatches,
+  generateStrictSkillCourt,
   applyMatchResult,
   revertMatchResult,
   PLAYERS_PER_COURT,
@@ -34,12 +35,14 @@ import V2Sidebar from './V2Sidebar'
 import V2StandingsView, { computeStandings } from './V2StandingsView'
 import {
   clearV2Session,
+  DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING,
   DEFAULT_V2_COURTS,
   DEFAULT_V2_GAME_MODE,
   DEFAULT_V2_GAME_TYPE,
   DEFAULT_V2_SKILL_ADJUSTMENT,
   DEFAULT_V2_WIN_STREAK,
   V2_GAME_TYPES,
+  loadV2AllowAdjacentSkillMixing,
   loadV2CourtMatchups,
   loadV2Courts,
   loadV2GameMode,
@@ -50,6 +53,7 @@ import {
   loadV2Players,
   loadV2SessionStarted,
   persistV2Session,
+  saveV2AllowAdjacentSkillMixing,
   saveV2CourtMatchups,
   saveV2MatchHistory,
   saveV2Players,
@@ -118,6 +122,9 @@ export default function AppV2() {
   const [numberOfCourts, setNumberOfCourts] = useState(loadV2Courts)
   const [winStreak, setWinStreak] = useState(loadV2WinStreak)
   const [skillAdjustment, setSkillAdjustment] = useState(loadV2SkillAdjustment)
+  const [allowAdjacentSkillMixing, setAllowAdjacentSkillMixing] = useState(
+    loadV2AllowAdjacentSkillMixing
+  )
   const [isStartingSession, setIsStartingSession] = useState(false)
   const [isEndingSession, setIsEndingSession] = useState(false)
   const startTimeoutRef = useRef(null)
@@ -242,6 +249,11 @@ export default function AppV2() {
   }, [skillAdjustment])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    saveV2AllowAdjacentSkillMixing(allowAdjacentSkillMixing)
+  }, [allowAdjacentSkillMixing])
+
+  useEffect(() => {
     if (!toastMessage) return
     const timer = window.setTimeout(() => {
       setToastMessage('')
@@ -263,6 +275,7 @@ export default function AppV2() {
         courts: numberOfCourts,
         winStreak,
         skillAdjustment,
+        allowAdjacentSkillMixing,
       })
       setSessionStarted(true)
       setActiveView('players')
@@ -282,6 +295,7 @@ export default function AppV2() {
       setNumberOfCourts(DEFAULT_V2_COURTS)
       setWinStreak(DEFAULT_V2_WIN_STREAK)
       setSkillAdjustment(DEFAULT_V2_SKILL_ADJUSTMENT)
+      setAllowAdjacentSkillMixing(DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING)
       setPlayers([])
       setCourtMatchups(null)
       setMatchHistory([])
@@ -420,6 +434,9 @@ export default function AppV2() {
         }
       }
 
+      let preferredPlayers = []
+      let useCheckInOrderForRefresh = false
+
       if (!generatedCourt) {
         if (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY) {
           const onCourtIds = new Set()
@@ -431,7 +448,7 @@ export default function AppV2() {
           const eligibleForCourt = currentPlayers.filter(
             (player) => player.checkedIn && !onCourtIds.has(player.id)
           )
-          const useCheckInOrderForRefresh = shouldUseCheckInOrder(
+          useCheckInOrderForRefresh = shouldUseCheckInOrder(
             eligibleForCourt,
             matchHistory
           )
@@ -447,12 +464,13 @@ export default function AppV2() {
                   }
                 )
               : { selected: [] }
-          const preferredPlayers = fairnessPool.slice(0, PLAYERS_PER_COURT)
+          preferredPlayers = fairnessPool.slice(0, PLAYERS_PER_COURT)
 
           if (preferredPlayers.length === PLAYERS_PER_COURT) {
             const preferredResult = generateMatches(preferredPlayers, {
               courts: 1,
               matchHistory,
+              allowAdjacentSkillMixing,
             })
             generatedCourt = preferredResult.courts[0] ?? null
           }
@@ -464,12 +482,26 @@ export default function AppV2() {
             cooldownCourts: numberOfCourts,
             matchHistory,
             excludePlayerIds: otherCourtPlayerIds,
+            allowAdjacentSkillMixing,
           })
           generatedCourt = result.courts[0] ?? null
         }
       }
 
-      if (!generatedCourt) {
+      const strictMixing =
+        gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY && !allowAdjacentSkillMixing
+
+      if (!generatedCourt && strictMixing) {
+        generatedCourt = generateStrictSkillCourt(effectivePlayers, {
+          matchHistory,
+          courts: numberOfCourts,
+          excludePlayerIds: otherCourtPlayerIds,
+          preferredPlayerIds: preferredPlayers.map((p) => p.id),
+          useCheckInOrder: useCheckInOrderForRefresh,
+        })
+      }
+
+      if (!generatedCourt && !strictMixing) {
         generatedCourt = generateFallbackCourtByPriority(effectivePlayers, {
           courtIndex,
           courtMatchups: courtMatchups ?? [],
@@ -493,7 +525,9 @@ export default function AppV2() {
               ? 'Not enough checked-in players. At least 4 are required.'
               : enforceGap && eligibleAfterGap < 4
                 ? 'Games gap limit reached — not enough eligible players with fewer games. Score or refresh other courts so lower-game players can play first.'
-                : 'No valid matchup could be generated with current skill groups, cooldown rules, and players assigned to other courts. Try scoring another court first or edit this court manually.',
+                : strictMixing
+                  ? 'Not enough players of the same skill level to fill a court. Turn on Adjacent Skill Mixing or check in more players at one level.'
+                  : 'No valid matchup could be generated with current skill groups, cooldown rules, and players assigned to other courts. Try scoring another court first or edit this court manually.',
         })
         return
       }
@@ -1035,9 +1069,14 @@ export default function AppV2() {
             </h1>
             {activeView === 'courts' &&
             gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
-              <label className="mt-2 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Skill Adjustment: {skillAdjustment}
-              </label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Skill Adjustment: {skillAdjustment}
+                </label>
+                <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Adjacent Skill Mixing: {allowAdjacentSkillMixing ? 'On' : 'Off'}
+                </label>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -1048,6 +1087,7 @@ export default function AppV2() {
             numberOfCourts={numberOfCourts}
             winStreak={winStreak}
             skillAdjustment={skillAdjustment}
+            allowAdjacentSkillMixing={allowAdjacentSkillMixing}
             sessionStarted={sessionStarted}
             isStartingSession={isStartingSession}
             isEndingSession={isEndingSession}
@@ -1056,6 +1096,7 @@ export default function AppV2() {
             onSelectNumberOfCourts={setNumberOfCourts}
             onSelectWinStreak={setWinStreak}
             onSelectSkillAdjustment={setSkillAdjustment}
+            onToggleAdjacentSkillMixing={setAllowAdjacentSkillMixing}
             onStartSession={handleStartSession}
             onEndSession={handleEndSession}
           />
@@ -1069,6 +1110,7 @@ export default function AppV2() {
               matchHistory={matchHistory}
               checkedInCount={checkedInCount}
               winStreak={winStreak}
+              allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               lockUpNext={isUpNextLocked}
               onGenerateCourt={handleGenerateCourt}
               onEditCourt={handleOpenEditCourt}
@@ -1080,6 +1122,7 @@ export default function AppV2() {
               currentTeamA={courtMatchups?.[editCourtModal.courtIndex]?.teamA ?? []}
               currentTeamB={courtMatchups?.[editCourtModal.courtIndex]?.teamB ?? []}
               checkedInPlayers={players.filter((p) => p.checkedIn)}
+              allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               onClose={handleCloseEditCourt}
               onSubmit={handleEditCourtSubmit}
             />
