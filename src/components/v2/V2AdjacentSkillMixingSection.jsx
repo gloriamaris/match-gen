@@ -14,6 +14,10 @@ export default function V2AdjacentSkillMixingSection({
       <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
         Allow Adjacent Skill Mixing
       </h2>
+      <p className="text-xs text-slate-500">
+        When Off, players are matched strictly within the same skill level. When
+        On, Beginner+Novice and Intermediate+Advanced can play together.
+      </p>
       <select
         value={allowAdjacentSkillMixing ? 'on' : 'off'}
         disabled={disabled}
@@ -25,10 +29,6 @@ export default function V2AdjacentSkillMixingSection({
         <option value="off">Off</option>
         <option value="on">On</option>
       </select>
-      <p className="text-xs text-slate-500">
-        When Off, players are matched strictly within the same skill level. When
-        On, Beginner+Novice and Intermediate+Advanced can play together.
-      </p>
     </section>
   )
 }

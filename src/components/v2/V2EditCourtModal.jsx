@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { canPlayerGroupsOpponents } from '../../match-engines/v2/ProgressivePlay.engine'
+import { V2_GAME_TYPES } from './v2Storage'
 
 export default function V2EditCourtModal({
   isOpen,
   courtIndex,
+  gameMode = 'doubles',
+  gameType,
   currentTeamA = [],
   currentTeamB = [],
   checkedInPlayers = [],
@@ -12,8 +15,11 @@ export default function V2EditCourtModal({
   onClose,
   onSubmit,
 }) {
-  const [teamAIds, setTeamAIds] = useState(['', ''])
-  const [teamBIds, setTeamBIds] = useState(['', ''])
+  const playersPerTeam = gameMode === 'singles' ? 1 : 2
+  const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+  const emptyTeam = () => Array.from({ length: playersPerTeam }, () => '')
+  const [teamAIds, setTeamAIds] = useState(emptyTeam)
+  const [teamBIds, setTeamBIds] = useState(emptyTeam)
   const [errors, setErrors] = useState({
     teamA: '',
     teamB: '',
@@ -23,17 +29,15 @@ export default function V2EditCourtModal({
 
   useEffect(() => {
     if (isOpen) {
-      setTeamAIds([
-        currentTeamA[0]?.id ?? '',
-        currentTeamA[1]?.id ?? '',
-      ])
-      setTeamBIds([
-        currentTeamB[0]?.id ?? '',
-        currentTeamB[1]?.id ?? '',
-      ])
+      setTeamAIds(
+        Array.from({ length: playersPerTeam }, (_, i) => currentTeamA[i]?.id ?? '')
+      )
+      setTeamBIds(
+        Array.from({ length: playersPerTeam }, (_, i) => currentTeamB[i]?.id ?? '')
+      )
       setErrors({ teamA: '', teamB: '', duplicate: '', skillGroup: '' })
     }
-  }, [isOpen, courtIndex])
+  }, [isOpen, courtIndex, playersPerTeam])
 
   const selectedIds = useMemo(
     () => new Set([...teamAIds, ...teamBIds].filter(Boolean)),
@@ -68,16 +72,23 @@ export default function V2EditCourtModal({
     const teamAPlayers = getSelectedPlayers(filteredA)
     const teamBPlayers = getSelectedPlayers(filteredB)
 
+    // Round Robin has no skill-group constraint; skill validation only applies
+    // to the (doubles) Progressive Play / Throne Run modes.
     const teamsCannotPlay =
+      !isRoundRobin &&
+      playersPerTeam === 2 &&
       teamAPlayers.length === 2 &&
       teamBPlayers.length === 2 &&
       !canPlayerGroupsOpponents(teamAPlayers, teamBPlayers, {
         allowAdjacent: allowAdjacentSkillMixing,
       })
 
+    const selectPrompt =
+      playersPerTeam === 1 ? 'Select a player' : 'Select two players'
+
     const nextErrors = {
-      teamA: filteredA.length === 2 ? '' : 'Select two players',
-      teamB: filteredB.length === 2 ? '' : 'Select two players',
+      teamA: filteredA.length === playersPerTeam ? '' : selectPrompt,
+      teamB: filteredB.length === playersPerTeam ? '' : selectPrompt,
       duplicate: hasDuplicates ? 'Players can only appear once' : '',
       skillGroup: teamsCannotPlay
         ? allowAdjacentSkillMixing
@@ -111,7 +122,8 @@ export default function V2EditCourtModal({
     const ids = team === 'A' ? teamAIds : teamBIds
     const currentId = ids[slot]
     const available = getAvailable(currentId)
-    const label = `Player ${team === 'A' ? slot + 1 : slot + 3}`
+    const labelOffset = team === 'A' ? 0 : playersPerTeam
+    const label = `Player ${labelOffset + slot + 1}`
 
     return (
       <select
@@ -153,8 +165,11 @@ export default function V2EditCourtModal({
           <div>
             <h3 className="mb-2 text-sm font-semibold text-slate-600">Team A</h3>
             <div className="space-y-2">
-              {renderSelect('A', 0)}
-              {renderSelect('A', 1)}
+              {Array.from({ length: playersPerTeam }, (_, slot) => (
+                <React.Fragment key={`A-${slot}`}>
+                  {renderSelect('A', slot)}
+                </React.Fragment>
+              ))}
             </div>
             {errors.teamA && (
               <p className="mt-1 text-xs text-red-500">{errors.teamA}</p>
@@ -164,8 +179,11 @@ export default function V2EditCourtModal({
           <div>
             <h3 className="mb-2 text-sm font-semibold text-slate-600">Team B</h3>
             <div className="space-y-2">
-              {renderSelect('B', 0)}
-              {renderSelect('B', 1)}
+              {Array.from({ length: playersPerTeam }, (_, slot) => (
+                <React.Fragment key={`B-${slot}`}>
+                  {renderSelect('B', slot)}
+                </React.Fragment>
+              ))}
             </div>
             {errors.teamB && (
               <p className="mt-1 text-xs text-red-500">{errors.teamB}</p>

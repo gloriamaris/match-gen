@@ -17,6 +17,12 @@ import {
   selectPrimaryThroneWinner,
 } from '../../match-engines/v2/ThroneRun.engine'
 import {
+  generateRoundRobinCourt,
+  applyMatchResult as rrApplyMatchResult,
+  revertMatchResult as rrRevertMatchResult,
+  computeRoundRobinMatchupProgress,
+} from '../../match-engines/v2/RoundRobin.engine'
+import {
   applyGamesGapExclusions,
   buildGamesGapExclusions,
   countAvailableEligiblePlayers,
@@ -312,6 +318,22 @@ export default function AppV2() {
     setActiveView(view)
   }
 
+  const showRoundRobinCompleteModal = () => {
+    setErrorModal({
+      isOpen: true,
+      title: 'All Round Robin match ups have been generated',
+      message: 'There are no more remaining match ups.',
+    })
+  }
+
+  const isRoundRobinComplete = (playerList) => {
+    if (gameType !== V2_GAME_TYPES.ROUND_ROBIN) return false
+    const { remaining, total } = computeRoundRobinMatchupProgress(playerList, {
+      gameMode,
+    })
+    return total > 0 && remaining === 0
+  }
+
   // -- Court generation (Refresh) ------------------------------------------
 
   const handleGenerateCourt = (courtIndex) => {
@@ -325,6 +347,11 @@ export default function AppV2() {
         `Court ${courtIndex + 1} already has players assigned. Refresh anyway? This will replace the current matchup.`
       )
     ) {
+      return
+    }
+
+    if (isRoundRobinComplete(loadV2Players())) {
+      showRoundRobinCompleteModal()
       return
     }
 
@@ -378,6 +405,19 @@ export default function AppV2() {
       )
 
       let generatedCourt = null
+
+      const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+
+      if (isRoundRobin) {
+        generatedCourt = generateRoundRobinCourt(effectivePlayers, {
+          courtIndex,
+          courtMatchups: courtMatchups ?? [],
+          matchHistory,
+          courts: numberOfCourts,
+          gameMode,
+          excludePlayerIds: otherCourtPlayerIds,
+        })
+      }
 
       if (gameType === V2_GAME_TYPES.THRONE_RUN) {
         const lastMatchOnCourt = [...matchHistory]
@@ -437,7 +477,7 @@ export default function AppV2() {
       let preferredPlayers = []
       let useCheckInOrderForRefresh = false
 
-      if (!generatedCourt) {
+      if (!generatedCourt && !isRoundRobin) {
         if (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY) {
           const onCourtIds = new Set()
           ;(courtMatchups ?? []).forEach((matchup) => {
@@ -501,7 +541,7 @@ export default function AppV2() {
         })
       }
 
-      if (!generatedCourt && !strictMixing) {
+      if (!generatedCourt && !strictMixing && !isRoundRobin) {
         generatedCourt = generateFallbackCourtByPriority(effectivePlayers, {
           courtIndex,
           courtMatchups: courtMatchups ?? [],
@@ -511,23 +551,31 @@ export default function AppV2() {
       }
 
       if (!generatedCourt) {
+        if (isRoundRobin && isRoundRobinComplete(currentPlayers)) {
+          showRoundRobinCompleteModal()
+          return
+        }
+
         const checkedInCount = currentPlayers.filter((player) => player.checkedIn).length
         const eligibleAfterGap = countAvailableEligiblePlayers(
           currentPlayers,
           finalExcludeIds,
           otherCourtPlayerIds
         )
+        const minPlayers = isRoundRobin && gameMode === 'singles' ? 2 : 4
         setErrorModal({
           isOpen: true,
           title: `Could not generate Court ${courtIndex + 1}`,
           message:
-            checkedInCount < 4
-              ? 'Not enough checked-in players. At least 4 are required.'
-              : enforceGap && eligibleAfterGap < 4
+            checkedInCount < minPlayers
+              ? `Not enough checked-in players. At least ${minPlayers} are required.`
+              : enforceGap && eligibleAfterGap < minPlayers
                 ? 'Games gap limit reached — not enough eligible players with fewer games. Score or refresh other courts so lower-game players can play first.'
                 : strictMixing
                   ? 'Not enough players of the same skill level to fill a court. Turn on Adjacent Skill Mixing or check in more players at one level.'
-                  : 'No valid matchup could be generated with current skill groups, cooldown rules, and players assigned to other courts. Try scoring another court first or edit this court manually.',
+                  : isRoundRobin
+                    ? 'No valid matchup could be generated with current cooldown rules and players assigned to other courts. Try scoring another court first or edit this court manually.'
+                    : 'No valid matchup could be generated with current skill groups, cooldown rules, and players assigned to other courts. Try scoring another court first or edit this court manually.',
         })
         return
       }
@@ -633,6 +681,7 @@ export default function AppV2() {
     const teamBIds = matchup.teamB.map((p) => p.id)
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
+    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
 
     let updatedPlayers
     let historyEntry
@@ -647,6 +696,15 @@ export default function AppV2() {
       updatedPlayers = result.players
       historyEntry = result.historyEntry
       ejectedWinnerIds = result.ejectedWinnerIds
+    } else if (isRoundRobin) {
+      const result = rrApplyMatchResult(players, {
+        courtIndex,
+        teamAIds,
+        teamBIds,
+        winningTeam,
+      })
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
     } else {
       const result = applyMatchResult(
         players,
@@ -707,6 +765,10 @@ export default function AppV2() {
     saveV2CourtMatchups(nextMatchups)
     setIsUpNextLocked(true)
 
+    if (isRoundRobinComplete(updatedPlayers)) {
+      showRoundRobinCompleteModal()
+    }
+
     handleCloseScore()
   }
 
@@ -714,12 +776,20 @@ export default function AppV2() {
 
   const handleAddManualMatch = ({ court, teamAIds, teamBIds, scoreA, scoreB, enteredBy }) => {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
+    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
 
-    const { players: updatedPlayers, historyEntry } = applyMatchResult(
-      players,
-      { courtIndex: null, teamAIds, teamBIds, winningTeam },
-      { skillAdjustment }
-    )
+    const { players: updatedPlayers, historyEntry } = isRoundRobin
+      ? rrApplyMatchResult(players, {
+          courtIndex: null,
+          teamAIds,
+          teamBIds,
+          winningTeam,
+        })
+      : applyMatchResult(
+          players,
+          { courtIndex: null, teamAIds, teamBIds, winningTeam },
+          { skillAdjustment }
+        )
 
     setPlayers(updatedPlayers)
     saveV2Players(updatedPlayers)
@@ -744,6 +814,10 @@ export default function AppV2() {
     const nextHistory = [...matchHistory, enrichedEntry]
     setMatchHistory(nextHistory)
     saveV2MatchHistory(nextHistory)
+
+    if (isRoundRobinComplete(updatedPlayers)) {
+      showRoundRobinCompleteModal()
+    }
   }
 
   const handleEditMatch = ({
@@ -761,13 +835,16 @@ export default function AppV2() {
     const oldMatch = matchHistory[matchIndex]
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
+    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
     const useThroneRunEngine =
       isThroneRun &&
       (oldMatch.ejectedWinnerIds != null || oldMatch.courtIndex != null)
 
     let updatedPlayers = useThroneRunEngine
       ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
-      : revertMatchResult(players, oldMatch, { skillAdjustment })
+      : isRoundRobin
+        ? rrRevertMatchResult(players, oldMatch)
+        : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     let historyEntry
     let ejectedWinnerIds
@@ -786,6 +863,15 @@ export default function AppV2() {
       updatedPlayers = result.players
       historyEntry = result.historyEntry
       ejectedWinnerIds = result.ejectedWinnerIds
+    } else if (isRoundRobin) {
+      const result = rrApplyMatchResult(updatedPlayers, {
+        courtIndex: oldMatch.courtIndex ?? null,
+        teamAIds,
+        teamBIds,
+        winningTeam,
+      })
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
     } else {
       const result = applyMatchResult(
         updatedPlayers,
@@ -828,6 +914,10 @@ export default function AppV2() {
     nextHistory[matchIndex] = enrichedEntry
     setMatchHistory(nextHistory)
     saveV2MatchHistory(nextHistory)
+
+    if (isRoundRobinComplete(updatedPlayers)) {
+      showRoundRobinCompleteModal()
+    }
   }
 
   // -- Exports --------------------------------------------------------------
@@ -1104,6 +1194,7 @@ export default function AppV2() {
           <>
             <V2CourtsView
               gameType={gameType}
+              gameMode={gameMode}
               numberOfCourts={numberOfCourts}
               courtMatchups={courtMatchups}
               players={players}
@@ -1119,6 +1210,8 @@ export default function AppV2() {
             <V2EditCourtModal
               isOpen={editCourtModal.isOpen}
               courtIndex={editCourtModal.courtIndex}
+              gameMode={gameMode}
+              gameType={gameType}
               currentTeamA={courtMatchups?.[editCourtModal.courtIndex]?.teamA ?? []}
               currentTeamB={courtMatchups?.[editCourtModal.courtIndex]?.teamB ?? []}
               checkedInPlayers={players.filter((p) => p.checkedIn)}

@@ -1,10 +1,11 @@
-import React, { useRef } from 'react'
+import React, { useMemo, useRef } from 'react'
 import { Check, Pencil, RefreshCw } from 'lucide-react'
 import {
   getCooldownIds,
   selectFairnessPool,
   shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
+import { computeRoundRobinMatchupProgress } from '../../match-engines/v2/RoundRobin.engine'
 import { V2_GAME_TYPES } from './v2Storage'
 
 const SKILL_RANK = {
@@ -140,6 +141,7 @@ function V2PlayerStatusGroups({
 
 export default function V2CourtsView({
   gameType,
+  gameMode = 'doubles',
   numberOfCourts,
   courtMatchups,
   players = [],
@@ -151,6 +153,7 @@ export default function V2CourtsView({
   onEditCourt = noop,
   onOpenScore = noop,
 }) {
+  const minPlayers = gameMode === 'singles' ? 2 : 4
   if (numberOfCourts <= 0) {
     return null
   }
@@ -164,6 +167,14 @@ export default function V2CourtsView({
   })
 
   const checkedInPlayers = players.filter((p) => p.checkedIn)
+  const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+  const roundRobinProgress = useMemo(
+    () =>
+      isRoundRobin
+        ? computeRoundRobinMatchupProgress(players, { gameMode })
+        : null,
+    [isRoundRobin, players, gameMode]
+  )
   const cooldownIds = getCooldownIds(matchHistory, numberOfCourts)
   const playingPlayers = checkedInPlayers.filter((p) => onCourtIds.has(p.id))
   const cooldownPlayers = checkedInPlayers.filter(
@@ -179,7 +190,7 @@ export default function V2CourtsView({
   const eligiblePlayers = checkedInPlayers.filter((p) => !onCourtIds.has(p.id))
   const useCheckInOrder = shouldUseCheckInOrder(eligiblePlayers, matchHistory)
   const { selected: liveUpNextPlayers } =
-    eligiblePlayers.length >= 4
+    eligiblePlayers.length >= minPlayers
       ? selectFairnessPool(eligiblePlayers, numberOfCourts, matchHistory, {
           useCheckInOrder,
           cooldownSlots: numberOfCourts,
@@ -260,10 +271,16 @@ export default function V2CourtsView({
     }
   })
 
-  const notEnoughPlayers = checkedInCount < 4
+  const notEnoughPlayers = checkedInCount < minPlayers
 
   return (
     <div className="relative space-y-6">
+      {isRoundRobin && roundRobinProgress && roundRobinProgress.total > 0 ? (
+        <p className="text-sm font-semibold text-slate-600">
+          Remaining Matchups: {roundRobinProgress.remaining}/
+          {roundRobinProgress.total}
+        </p>
+      ) : null}
       <div className={getGridClasses(numberOfCourts)}>
         {courts.map((court) => (
           <div key={court.index} className="space-y-3">
@@ -554,7 +571,7 @@ export default function V2CourtsView({
               Not enough players checked in
             </h2>
             <p className="mt-2 text-sm text-slate-600">
-              A game cannot start until at least 4 players have checked in.
+              A game cannot start until at least {minPlayers} players have checked in.
             </p>
             <p className="mt-3 text-xs font-semibold uppercase text-slate-400">
               Currently checked in: {checkedInCount}

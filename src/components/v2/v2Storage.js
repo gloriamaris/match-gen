@@ -15,6 +15,7 @@ export const V2_STORAGE_KEYS = {
 }
 
 export const V2_GAME_TYPES = {
+  ROUND_ROBIN: 'round-robin',
   PROGRESSIVE_PLAY: 'progressive-play',
   THRONE_RUN: 'throne-run',
 }
@@ -93,6 +94,7 @@ export function loadV2GameType() {
     return V2_GAME_TYPES.PROGRESSIVE_PLAY
   }
   if (
+    stored === V2_GAME_TYPES.ROUND_ROBIN ||
     stored === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
     stored === V2_GAME_TYPES.THRONE_RUN
   ) {

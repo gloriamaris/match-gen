@@ -9,6 +9,12 @@ const inactiveButton =
 
 const GAME_TYPE_OPTIONS = [
   {
+    id: V2_GAME_TYPES.ROUND_ROBIN,
+    label: 'Round Robin',
+    description:
+      'Players follow a fixed rotation schedule so everyone partners with and plays against each other over the session.',
+  },
+  {
     id: V2_GAME_TYPES.PROGRESSIVE_PLAY,
     label: 'Progressive Play',
     description:
