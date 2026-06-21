@@ -1,0 +1,41 @@
+Game,Round,Court,Team A,Team B,Score,Winner
+1,1,Court 1,Mr. B / Mrs. B,Claire / Joyce Mariel,11 - 7,Mr. B / Mrs. B
+2,1,Court 2,Anthony Karlo / Elizabeth,Celso / Jang,7 - 11,Celso / Jang
+3,1,Court 3,Gifford / John Edward,Goy / Julia,11 - 7,Gifford / John Edward
+4,2,Court 1,Khyle / Kiko,Christian / Kevin,7 - 11,Christian / Kevin
+5,2,Court 2,Eduard Carpio / R,Thirdy / Jigz Miranda,11 - 7,Eduard Carpio / R
+6,2,Court 3,Neke / Brendy,Lance / Joniel,7 - 11,Lance / Joniel
+7,3,Court 1,Mr. B / Mrs. B,Claire / Apryl,11 - 7,Mr. B / Mrs. B
+8,3,Court 2,John Edward / Anthony Karlo,Elizabeth / Gifford,7 - 11,Elizabeth / Gifford
+9,3,Court 3,Goy / Jang,Julia / Celso,11 - 7,Goy / Jang
+10,4,Court 1,Kiko / Christian,Joyce Mariel / Kevin,7 - 11,Joyce Mariel / Kevin
+11,4,Court 2,Lance / James Labor,Jigz Miranda / Joniel,11 - 7,Lance / James Labor
+12,4,Court 3,Brendy / Thirdy,Neke / Eduard Carpio,7 - 11,Neke / Eduard Carpio
+13,5,Court 1,Anthony Karlo / Apryl,Julia / Claire,11 - 7,Anthony Karlo / Apryl
+14,5,Court 2,Jang / Gifford,Mr. B / Mrs. B,7 - 11,Mr. B / Mrs. B
+15,5,Court 3,Elizabeth / Goy,John Edward / R,11 - 7,Elizabeth / Goy
+16,6,Court 1,Khyle / Jigz Miranda,Kiko / Joyce Mariel,7 - 11,Kiko / Joyce Mariel
+17,6,Court 2,Kevin / Neke,Eduard Carpio / Lance,11 - 7,Kevin / Neke
+18,6,Court 3,James Labor / Brendy,Thirdy / Joniel,7 - 11,Thirdy / Joniel
+19,7,Court 1,Apryl / Christian,Julia / Anthony Karlo,11 - 7,Apryl / Christian
+20,7,Court 2,Elizabeth / Celso,Mr. B / Mrs. B,7 - 11,Mr. B / Mrs. B
+21,7,Court 3,Jang / R,Goy / John Edward,11 - 7,Jang / R
+22,8,Court 1,Jigz Miranda / Kiko,Claire / Khyle,7 - 11,Claire / Khyle
+23,8,Court 2,Thirdy / Lance,Gifford / Kevin,11 - 7,Thirdy / Lance
+24,8,Court 3,James Labor / Neke,Brendy / Joyce Mariel,7 - 11,Brendy / Joyce Mariel
+25,9,Court 1,Eduard Carpio / John Edward,Mr. B / Mrs. B,11 - 7,Eduard Carpio / John Edward
+26,9,Court 2,Goy / Apryl,Elizabeth / Joniel,7 - 11,Elizabeth / Joniel
+27,10,Court 1,Anthony Karlo / Khyle,Claire / Celso,11 - 7,Anthony Karlo / Khyle
+28,10,Court 2,Thirdy / R,Christian / Lance,7 - 11,Christian / Lance
+29,11,Court 1,Mr. B / Mrs. B,Jang / Kevin,11 - 7,Mr. B / Mrs. B
+30,11,Court 2,Neke / Gifford,John Edward / James Labor,7 - 11,John Edward / James Labor
+31,12,Court 1,Julia / Kiko,Apryl / Celso,11 - 7,Julia / Kiko
+32,12,Court 2,Joyce Mariel / Eduard Carpio,Joniel / Anthony Karlo,7 - 11,Joniel / Anthony Karlo
+33,13,Court 1,Jigz Miranda / Claire,Kevin / Khyle,11 - 7,Jigz Miranda / Claire
+34,13,Court 2,Lance / Jang,Christian / R,7 - 11,Christian / R
+35,13,Court 3,Brendy / Elizabeth,Goy / Thirdy,11 - 7,Brendy / Elizabeth
+36,14,Court 1,Apryl / Kiko,Celso / Joyce Mariel,7 - 11,Celso / Joyce Mariel
+37,14,Court 2,Joniel / John Edward,Mr. B / Mrs. B,11 - 7,Joniel / John Edward
+38,14,Court 3,Eduard Carpio / Gifford,Neke / Anthony Karlo,7 - 11,Neke / Anthony Karlo
+39,15,Court 1,Claire / Kevin,Julia / Jigz Miranda,11 - 7,Claire / Kevin
+40,15,Court 2,Elizabeth / Lance,James Labor / Christian,7 - 11,James Labor / Christian
