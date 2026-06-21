@@ -15,9 +15,9 @@ const WinsLossesRecord = ({ player }) => {
   )
 }
 
-const formatOppStrength = (player) => {
+const formatPointDiff = (player) => {
   const pd = Number(player?.pointDifferential) || 0
-  return `${pd}%`
+  return String(pd)
 }
 
 export default function ShareStandingsModal({
@@ -129,7 +129,7 @@ export default function ShareStandingsModal({
                           Record
                         </th>
                         <th className="w-[20%] px-2 py-3 text-center">
-                          Opp Strength
+                          Point Diff
                         </th>
                       </tr>
                     </thead>
@@ -158,7 +158,7 @@ export default function ShareStandingsModal({
                             {player ? <WinsLossesRecord player={player} /> : ''}
                           </td>
                           <td className="h-9 border-t border-slate-300 px-2 py-2 text-center">
-                            {player ? formatOppStrength(player) : ''}
+                            {player ? formatPointDiff(player) : ''}
                           </td>
                         </tr>
                       ))}

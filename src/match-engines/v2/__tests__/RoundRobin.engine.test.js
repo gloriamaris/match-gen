@@ -419,6 +419,42 @@ describe('generateRoundRobinCourt — locked pairs (doubles)', () => {
     expect(court.teamA).toHaveLength(1)
     expect(court.teamB).toHaveLength(1)
   })
+
+  it('excludes incomplete pairs from matchups when only one partner is checked in', () => {
+    const players = [
+      mk('a', { teammateId: 'b' }),
+      mk('b', { teammateId: 'a', checkedIn: false }),
+      mk('c', { teammateId: 'd' }),
+      mk('d', { teammateId: 'c' }),
+      mk('e', { teammateId: 'f' }),
+      mk('f', { teammateId: 'e' }),
+      mk('g', { teammateId: 'h' }),
+      mk('h', { teammateId: 'g' }),
+    ]
+    expect(computeRoundRobinMatchupProgress(players, { gameMode: 'doubles' })).toEqual({
+      remaining: 3,
+      total: 3,
+    })
+  })
+
+  it('does not place a checked-in player on court when their partner is checked out', () => {
+    const players = [
+      mk('a', { teammateId: 'b' }),
+      mk('b', { teammateId: 'a', checkedIn: false }),
+      mk('c'),
+      mk('d'),
+      mk('e'),
+      mk('f'),
+    ]
+    const court = generateRoundRobinCourt(players, {
+      courtIndex: 0,
+      matchHistory: [],
+      courts: 1,
+      gameMode: 'doubles',
+    })
+    const chosen = [...court.teamA, ...court.teamB].map((p) => p.id)
+    expect(chosen).not.toContain('a')
+  })
 })
 
 describe('generateRoundRobinCourt — singles', () => {

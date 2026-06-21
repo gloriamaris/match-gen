@@ -257,6 +257,23 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
   return best
 }
 
+// Checked-in players eligible for round robin. Mutual pairs count only when
+// BOTH partners are checked in; if only one is checked in, that pair is
+// excluded from matchups and court generation until both are present.
+const getRoundRobinActivePlayers = (players) => {
+  const roster = players ?? []
+  const byId = new Map(roster.map((player) => [player.id, player]))
+
+  return roster.filter((player) => {
+    if (!player.checkedIn) return false
+    const partnerId = player.teammateId
+    if (!partnerId) return true
+    const partner = byId.get(partnerId)
+    if (!partner || partner.teammateId !== player.id) return true
+    return partner.checkedIn
+  })
+}
+
 // -----------------------------------------------------------------------------
 // 5. Public API: generateRoundRobinCourt
 // -----------------------------------------------------------------------------
@@ -273,8 +290,8 @@ const generateRoundRobinCourt = (players, options = {}) => {
   const needed = teamSize * 2
   const excludeIds = new Set(excludePlayerIds ?? [])
 
-  const eligible = (players ?? []).filter(
-    (player) => player.checkedIn && !excludeIds.has(player.id)
+  const eligible = getRoundRobinActivePlayers(players).filter(
+    (player) => !excludeIds.has(player.id)
   )
   if (eligible.length < needed) return null
 
@@ -610,8 +627,8 @@ const generateRoundRobinCourtFromUnits = (eligible, units, options = {}) => {
 }
 
 const computeRoundRobinMatchupProgress = (players, { gameMode = 'doubles' } = {}) => {
-  const checkedIn = (players ?? []).filter((player) => player.checkedIn)
-  const n = checkedIn.length
+  const active = getRoundRobinActivePlayers(players)
+  const n = active.length
   const minPlayers = gameMode === 'singles' ? 2 : 4
 
   if (n < minPlayers) {
@@ -620,23 +637,23 @@ const computeRoundRobinMatchupProgress = (players, { gameMode = 'doubles' } = {}
 
   if (gameMode === 'singles') {
     const total = (n * (n - 1)) / 2
-    const unmetPairs = countUnmetPlayerPairs(checkedIn)
+    const unmetPairs = countUnmetPlayerPairs(active)
     return { remaining: unmetPairs, total }
   }
 
-  const units = buildRoundRobinUnits(checkedIn)
+  const units = buildRoundRobinUnits(active)
   const hasLockedTeams = units.some((unit) => unit.length >= 2)
 
   if (hasLockedTeams) {
     const teamCount = units.length
     const total = (teamCount * (teamCount - 1)) / 2
-    const playersById = new Map(checkedIn.map((player) => [player.id, player]))
+    const playersById = new Map(active.map((player) => [player.id, player]))
     const remaining = countUnmetUnitPairs(units, playersById)
     return { remaining, total }
   }
 
   const totalPairs = (n * (n - 1)) / 2
-  const unmetPairs = countUnmetPlayerPairs(checkedIn)
+  const unmetPairs = countUnmetPlayerPairs(active)
   return {
     remaining: Math.ceil(unmetPairs / 6),
     total: Math.ceil(totalPairs / 6),
@@ -650,6 +667,7 @@ const computeRoundRobinMatchupProgress = (players, { gameMode = 'doubles' } = {}
 export {
   teamSizeForMode,
   getCooldownIds,
+  getRoundRobinActivePlayers,
   metCount,
   matchSignature,
   computeRoundRobinMatchupProgress,

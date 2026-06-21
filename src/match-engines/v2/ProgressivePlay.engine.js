@@ -222,6 +222,26 @@ const isMixedGender = (a, b) => {
   return ga !== '' && gb !== '' && ga !== gb
 }
 
+// Lexicographic key for tie-breaking pairings: prefer earlier check-ins paired
+// together when mixed count and partner penalty are equal.
+const pairingCheckInOrderKey = (pairs) => {
+  const keys = pairs.map(([a, b]) => {
+    const orders = [checkInOrderOf(a), checkInOrderOf(b)].sort((x, y) => x - y)
+    return orders[0] * 10000 + orders[1]
+  })
+  keys.sort((a, b) => a - b)
+  return keys
+}
+
+const compareCheckInOrderPairings = (pairsA, pairsB) => {
+  const keysA = pairingCheckInOrderKey(pairsA)
+  const keysB = pairingCheckInOrderKey(pairsB)
+  for (let i = 0; i < keysA.length; i += 1) {
+    if (keysA[i] !== keysB[i]) return keysA[i] - keysB[i]
+  }
+  return 0
+}
+
 // Enumerate all ways to partition `players` into pairs. For N players this
 // produces (N-1)!! partitions, which is feasible for typical pickleball groups
 // (up to ~12 players per skill group).
@@ -263,25 +283,15 @@ const generateTeamsForGroup = (players, options = {}) => {
   const { useCheckInOrder = false } = options
   if (players.length < 2) return { teams: [], leftover: [...players] }
 
-  if (useCheckInOrder) {
-    const ordered = sortByCheckInOrder(players)
-    const teams = []
-    for (let i = 0; i + 1 < ordered.length; i += 2) {
-      teams.push({
-        players: [ordered[i], ordered[i + 1]],
-        locked: false,
-      })
-    }
-    const leftover =
-      ordered.length % 2 === 1 ? [ordered[ordered.length - 1]] : []
-    return { teams, leftover }
-  }
+  const orderedPlayers = useCheckInOrder
+    ? sortByCheckInOrder(players)
+    : shuffle([...players])
 
   // For small groups, enumerate all possible pair-partitions and pick the one
   // with the lowest total penalty. This avoids the greedy pitfall where early
   // choices force later high-penalty pairings.
   if (players.length <= MAX_ENUMERATION_SIZE) {
-    const all = enumerateAllPairings(shuffle(players))
+    const all = enumerateAllPairings(orderedPlayers)
 
     const freshOnly = all.filter((candidate) =>
       candidate.pairs.every(([a, b]) => !hasPartneredBefore(a, b))
@@ -292,7 +302,7 @@ const generateTeamsForGroup = (players, options = {}) => {
     let bestMixedCount = -1
     let bestTotal = Infinity
 
-    candidates.forEach((candidate) => {
+    const isBetterPairing = (candidate) => {
       const mixedCount = candidate.pairs.filter(([a, b]) =>
         isMixedGender(a, b)
       ).length
@@ -300,12 +310,23 @@ const generateTeamsForGroup = (players, options = {}) => {
         (sum, [a, b]) => sum + pairingPenalty(a, b),
         0
       )
-      if (
-        mixedCount > bestMixedCount ||
-        (mixedCount === bestMixedCount && total < bestTotal)
-      ) {
-        bestMixedCount = mixedCount
-        bestTotal = total
+      if (mixedCount > bestMixedCount) return true
+      if (mixedCount < bestMixedCount) return false
+      if (total < bestTotal) return true
+      if (total > bestTotal) return false
+      if (!useCheckInOrder) return false
+      return compareCheckInOrderPairings(candidate.pairs, bestPairing.pairs) < 0
+    }
+
+    candidates.forEach((candidate) => {
+      if (isBetterPairing(candidate)) {
+        bestMixedCount = candidate.pairs.filter(([a, b]) =>
+          isMixedGender(a, b)
+        ).length
+        bestTotal = candidate.pairs.reduce(
+          (sum, [a, b]) => sum + pairingPenalty(a, b),
+          0
+        )
         bestPairing = candidate
       }
     })
@@ -319,8 +340,8 @@ const generateTeamsForGroup = (players, options = {}) => {
     }
   }
 
-  // For larger groups, fall back to greedy with shuffle.
-  const available = shuffle([...players])
+  // For larger groups, fall back to greedy.
+  const available = [...orderedPlayers]
   const teams = []
   const used = new Set()
 
@@ -345,7 +366,15 @@ const generateTeamsForGroup = (players, options = {}) => {
         (isFresh === bestIsFresh && isMixed && !bestIsMixed)
       const sameTier = isFresh === bestIsFresh && isMixed === bestIsMixed
 
-      if (betterTier || (sameTier && penalty < bestPenalty)) {
+      const betterPenalty = sameTier && penalty < bestPenalty
+      const tiebreakCheckIn =
+        useCheckInOrder &&
+        sameTier &&
+        penalty === bestPenalty &&
+        bestPartner &&
+        checkInOrderOf(candidate) < checkInOrderOf(bestPartner)
+
+      if (betterTier || betterPenalty || tiebreakCheckIn) {
         bestPenalty = penalty
         bestPartner = candidate
         bestIsFresh = isFresh
@@ -699,6 +728,26 @@ const sortByFairnessPriority = (players, { useCheckInOrder = false, cooldownIds 
     return String(a.id).localeCompare(String(b.id))
   })
 
+// Ensure both members of a mutual locked pair are present in the pool whenever
+// either one is. A locked pair must always play together, so they must never be
+// split apart by cooldown/rested partitioning or the deficit slice.
+const includeLockedPartners = (pool, checkedIn) => {
+  const checkedInById = new Map(checkedIn.map((player) => [player.id, player]))
+  const poolIds = new Set(pool.map((player) => player.id))
+  const result = [...pool]
+
+  pool.forEach((player) => {
+    if (!player.teammateId) return
+    const teammate = checkedInById.get(player.teammateId)
+    if (!teammate || teammate.teammateId !== player.id) return
+    if (poolIds.has(teammate.id)) return
+    result.push(teammate)
+    poolIds.add(teammate.id)
+  })
+
+  return result
+}
+
 const buildPoolWithCooldown = (checkedIn, courtSlots, matchHistory, options) => {
   const { useCheckInOrder = false, cooldownSlots } = options
   const minPlayers = courtSlots * PLAYERS_PER_COURT
@@ -715,36 +764,22 @@ const buildPoolWithCooldown = (checkedIn, courtSlots, matchHistory, options) => 
     ]
   }
 
+  // A locked partner may have been left out (on cooldown, or beyond the deficit
+  // slice). Pull them back in so the pair is never split.
+  pool = includeLockedPartners(pool, checkedIn)
+
   return { pool, cooldownIds }
 }
 
-const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) => {
-  const { useCheckInOrder = false } = options
-  const bufferSize = courtSlots <= 1 ? 2 : PLAYERS_PER_COURT
-  const neededPlayers = courtSlots * PLAYERS_PER_COURT + bufferSize
-  const { pool, cooldownIds } = buildPoolWithCooldown(
-    checkedIn,
-    courtSlots,
-    matchHistory,
-    options
-  )
+const pairAvgGames = (pair) =>
+  ((Number(pair[0].gamesPlayed) || 0) + (Number(pair[1].gamesPlayed) || 0)) / 2
 
-  const allHavePlayed = checkedIn.every(
-    (player) => (Number(player.gamesPlayed) || 0) >= 1
-  )
-
-  if (!allHavePlayed) {
-    const selected = pool.slice(0, Math.min(pool.length, neededPlayers))
-    const selectedIds = new Set(selected.map((player) => player.id))
-    const fairnessSitOuts = checkedIn.filter((player) => !selectedIds.has(player.id))
-    return { selected, fairnessSitOuts }
-  }
-
-  // Phase 2: everyone has at least 1 game — locked pairs + games-played fairness.
+// Locked pairs are always 2-slot units: both play or both sit out.
+const buildFairnessUnits = (pool, cooldownIds) => {
   const byId = new Map(pool.map((player) => [player.id, player]))
-
   const lockedPairs = []
   const lockedIds = new Set()
+
   pool.forEach((player) => {
     if (!player.teammateId || lockedIds.has(player.id)) return
     const teammate = byId.get(player.teammateId)
@@ -757,13 +792,7 @@ const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) =
 
   const soloPlayers = pool.filter((player) => !lockedIds.has(player.id))
 
-  const pairAvgGames = (pair) =>
-    ((Number(pair[0].gamesPlayed) || 0) + (Number(pair[1].gamesPlayed) || 0)) /
-    2
-
-  // Interleave locked pairs (as 2-slot units) with solo players, sorted by
-  // gamesPlayed so pairs no longer unconditionally consume slots first.
-  const units = [
+  return [
     ...lockedPairs.map((pair) => ({
       size: 2,
       players: pair,
@@ -777,8 +806,13 @@ const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) =
       onCooldown: cooldownIds.has(p.id),
     })),
   ]
+}
 
+const sortFairnessUnits = (units) => {
   units.sort((a, b) => {
+    const aZero = a.avgGames === 0 ? 0 : 1
+    const bZero = b.avgGames === 0 ? 0 : 1
+    if (aZero !== bZero) return aZero - bZero
     const gamesDiff = a.avgGames - b.avgGames
     if (gamesDiff !== 0) return gamesDiff
     const aCooldown = a.onCooldown ? 1 : 0
@@ -786,9 +820,12 @@ const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) =
     if (aCooldown !== bCooldown) return aCooldown - bCooldown
     return 0
   })
+  return units
+}
 
+const selectFromFairnessUnits = (units, slotCount) => {
   const selected = []
-  let slots = neededPlayers
+  let slots = slotCount
 
   for (const unit of units) {
     if (slots >= unit.size) {
@@ -796,6 +833,22 @@ const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) =
       slots -= unit.size
     }
   }
+
+  return selected
+}
+
+const selectFairnessPool = (checkedIn, courtSlots, matchHistory, options = {}) => {
+  const bufferSize = courtSlots <= 1 ? 2 : PLAYERS_PER_COURT
+  const neededPlayers = courtSlots * PLAYERS_PER_COURT + bufferSize
+  const { pool, cooldownIds } = buildPoolWithCooldown(
+    checkedIn,
+    courtSlots,
+    matchHistory,
+    options
+  )
+
+  const units = sortFairnessUnits(buildFairnessUnits(pool, cooldownIds))
+  const selected = selectFromFairnessUnits(units, neededPlayers)
 
   const selectedIds = new Set(selected.map((player) => player.id))
   const fairnessSitOuts = checkedIn.filter((player) => !selectedIds.has(player.id))

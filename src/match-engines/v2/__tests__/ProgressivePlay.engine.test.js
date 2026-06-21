@@ -21,6 +21,7 @@ import {
   shiftSkillLevel,
   skillGroupOf,
   teamPerformanceScore,
+  isMixedGender,
 } from '../ProgressivePlay.engine'
 
 // ---------------------------------------------------------------------------
@@ -559,6 +560,83 @@ describe('selectFairnessPool', () => {
     expect(selectedIds.has('B')).toBe(true)
   })
 
+  it('keeps locked pairs together in phase 1 when some players have 0 games', () => {
+    const [mrB, mrsB] = makePair('MrB', 'MrsB', {
+      skillLevel: 'Novice',
+      gamesPlayed: 0,
+      queueOrder: 16,
+    })
+    const solos = Array.from({ length: 18 }, (_, i) =>
+      makePlayer(`P${i}`, {
+        skillLevel: 'Intermediate',
+        gamesPlayed: 0,
+        queueOrder: i + 1,
+      })
+    )
+  // 20 players, 3 courts → needed = 16. Pair must enter or leave together.
+    const { selected, fairnessSitOuts } = selectFairnessPool(
+      [...solos, mrB, mrsB],
+      3,
+      []
+    )
+
+    expect(selected).toHaveLength(16)
+    const selectedIds = new Set(selected.map((p) => p.id))
+    expect(selectedIds.has('MrB')).toBe(selectedIds.has('MrsB'))
+    const sitOutIds = new Set(fairnessSitOuts.map((p) => p.id))
+    expect(sitOutIds.has('MrB')).toBe(sitOutIds.has('MrsB'))
+  })
+
+  it('never splits a locked pair when only one partner just played', () => {
+    // Only MrB appears in the recent round → MrB on cooldown, MrsB rested.
+    // Plenty of rested solos exist, so the on-cooldown pair would naturally
+    // sit out — but it must sit out as a unit, never split.
+    const [mrB, mrsB] = makePair('MrB', 'MrsB', {
+      skillLevel: 'Intermediate',
+      gamesPlayed: 1,
+    })
+    const solos = Array.from({ length: 6 }, (_, i) =>
+      makePlayer(`R${i}`, { skillLevel: 'Intermediate', gamesPlayed: 1 })
+    )
+    const recentHistory = [
+      { teamAIds: ['MrB', 'X1'], teamBIds: ['X2', 'X3'], winningTeam: 'A' },
+    ]
+    const { selected, fairnessSitOuts } = selectFairnessPool(
+      [mrB, mrsB, ...solos],
+      1,
+      recentHistory
+    )
+
+    const selectedIds = new Set(selected.map((p) => p.id))
+    expect(selectedIds.has('MrB')).toBe(selectedIds.has('MrsB'))
+    const sitOutIds = new Set(fairnessSitOuts.map((p) => p.id))
+    expect(sitOutIds.has('MrB')).toBe(sitOutIds.has('MrsB'))
+  })
+
+  it('keeps a locked pair in the pool even when one partner is beyond the deficit slice', () => {
+    // Both partners are on cooldown and rank low; the deficit fill could pull
+    // in one but not the other. They must stay together.
+    const [mrB, mrsB] = makePair('MrB', 'MrsB', {
+      skillLevel: 'Intermediate',
+      gamesPlayed: 5,
+    })
+    const rested = Array.from({ length: 2 }, (_, i) =>
+      makePlayer(`R${i}`, { skillLevel: 'Intermediate', gamesPlayed: 1 })
+    )
+    // Last round had both partners plus filler, so both are on cooldown.
+    const recentHistory = [
+      { teamAIds: ['MrB', 'MrsB'], teamBIds: ['X2', 'X3'], winningTeam: 'A' },
+    ]
+    const { selected } = selectFairnessPool(
+      [mrB, mrsB, ...rested],
+      1,
+      recentHistory
+    )
+
+    const selectedIds = new Set(selected.map((p) => p.id))
+    expect(selectedIds.has('MrB')).toBe(selectedIds.has('MrsB'))
+  })
+
   it('cooldown: recently-played players sit out even with lowest gamesPlayed', () => {
     // Player Z has 1 game but just played. 11 others have 3 games and are rested.
     // All have >= 1 game so fairness is active.
@@ -768,6 +846,69 @@ describe('check-in order at 0 games', () => {
       (teamAIds.includes('A') && teamAIds.includes('B')) ||
       (teamBIds.includes('A') && teamBIds.includes('B'))
     expect(abSameTeam).toBe(false)
+  })
+
+  it('prefers mixed partners on round 1 and uses check-in order as tiebreaker', () => {
+    const players = [
+      makePlayer('Monique', {
+        gender: 'Female',
+        skillLevel: 'Advanced',
+        queueOrder: 1,
+      }),
+      makePlayer('Jang', {
+        gender: 'Female',
+        skillLevel: 'Intermediate',
+        queueOrder: 4,
+      }),
+      makePlayer('James Labor', {
+        gender: 'Male',
+        skillLevel: 'Advanced',
+        queueOrder: 5,
+      }),
+      makePlayer('Celso', {
+        gender: 'Male',
+        skillLevel: 'Intermediate',
+        queueOrder: 6,
+      }),
+      makePlayer('Gifford', {
+        gender: 'Male',
+        skillLevel: 'Advanced',
+        queueOrder: 8,
+      }),
+      makePlayer('Joniel', {
+        gender: 'Male',
+        skillLevel: 'Advanced',
+        queueOrder: 9,
+      }),
+      makePlayer('Thirdy', {
+        gender: 'Female',
+        skillLevel: 'Advanced',
+        queueOrder: 10,
+      }),
+      makePlayer('Elizabeth', {
+        gender: 'Female',
+        skillLevel: 'Intermediate',
+        queueOrder: 11,
+      }),
+    ]
+
+    const { teams } = buildTeamUnits(players, {
+      useCheckInOrder: true,
+      allowAdjacentSkillMixing: true,
+    })
+
+    teams.forEach((team) => {
+      expect(isMixedGender(team.players[0], team.players[1])).toBe(true)
+    })
+
+    const pairIds = teams.map((team) =>
+      team.players
+        .map((player) => player.id)
+        .sort()
+        .join('/')
+    )
+    expect(pairIds).toContain('Celso/Jang')
+    expect(pairIds).toContain('James Labor/Monique')
   })
 })
 
@@ -1948,6 +2089,83 @@ describe('hard partner block', () => {
       (teamAIds.includes('A') && teamAIds.includes('B')) ||
       (teamBIds.includes('A') && teamBIds.includes('B'))
     expect(abTogether).toBe(true)
+  })
+
+  it('generateMatches keeps locked pair together on first round with overflow pool', () => {
+    const [mrB, mrsB] = makePair('MrB', 'MrsB', {
+      skillLevel: 'Novice',
+      gamesPlayed: 0,
+      queueOrder: 16,
+    })
+    const solos = Array.from({ length: 18 }, (_, i) =>
+      makePlayer(`P${i}`, {
+        skillLevel: 'Intermediate',
+        gamesPlayed: 0,
+        queueOrder: i + 1,
+      })
+    )
+    const result = generateMatches([...solos, mrB, mrsB], { courts: 3 })
+
+    const onCourtIds = new Set(allPlayerIds(result))
+    expect(onCourtIds.has('MrB')).toBe(onCourtIds.has('MrsB'))
+
+    if (onCourtIds.has('MrB')) {
+      const court = result.courts.find(
+        (c) =>
+          c.teamA.some((p) => p.id === 'MrB') || c.teamB.some((p) => p.id === 'MrB')
+      )
+      const team = court.teamA.some((p) => p.id === 'MrB') ? court.teamA : court.teamB
+      expect(team.some((p) => p.id === 'MrsB')).toBe(true)
+    }
+  })
+
+  it('keeps a locked pair together in round 2 after applying round-1 results', () => {
+    // Reproduces the reported bug: 20 players, 3 courts, a locked pair that
+    // played in round 1 must stay together (or sit out together) in round 2.
+    const [mrB, mrsB] = makePair('MrB', 'MrsB', {
+      skillLevel: 'Novice',
+      queueOrder: 16,
+    })
+    const others = Array.from({ length: 18 }, (_, i) =>
+      makePlayer(`P${i}`, {
+        skillLevel: 'Intermediate',
+        queueOrder: i + 1,
+      })
+    )
+    let players = [...others, mrB, mrsB]
+    const matchHistory = []
+
+    const applyRound = (teamAIds, teamBIds, winningTeam) => {
+      const { players: next, historyEntry } = applyMatchResult(
+        players,
+        { courtIndex: 0, teamAIds, teamBIds, winningTeam },
+        { skillAdjustment: 2 }
+      )
+      players = next
+      matchHistory.push(historyEntry)
+    }
+
+    // Round 1: the locked pair plays and wins on one court.
+    applyRound(['MrB', 'MrsB'], ['P0', 'P1'], 'A')
+    applyRound(['P2', 'P3'], ['P4', 'P5'], 'A')
+    applyRound(['P6', 'P7'], ['P8', 'P9'], 'B')
+
+    const result = generateMatches(players, { courts: 3, matchHistory })
+
+    const onCourtIds = new Set(allPlayerIds(result))
+    expect(onCourtIds.has('MrB')).toBe(onCourtIds.has('MrsB'))
+
+    if (onCourtIds.has('MrB')) {
+      const court = result.courts.find(
+        (c) =>
+          c.teamA.some((p) => p.id === 'MrB') ||
+          c.teamB.some((p) => p.id === 'MrB')
+      )
+      const team = court.teamA.some((p) => p.id === 'MrB')
+        ? court.teamA
+        : court.teamB
+      expect(team.some((p) => p.id === 'MrsB')).toBe(true)
+    }
   })
 
   it('hasPartneredBefore detects prior partnerships', () => {

@@ -504,7 +504,31 @@ export default function AppV2() {
                   }
                 )
               : { selected: [] }
-          preferredPlayers = fairnessPool.slice(0, PLAYERS_PER_COURT)
+          // Fill the preferred court pair-aware: a locked pair is added as a
+          // unit so it is never split across the 4-player slice boundary.
+          preferredPlayers = []
+          const preferredIds = new Set()
+          for (const player of fairnessPool) {
+            if (preferredPlayers.length >= PLAYERS_PER_COURT) break
+            if (preferredIds.has(player.id)) continue
+            const teammate =
+              player.teammateId && !preferredIds.has(player.teammateId)
+                ? fairnessPool.find(
+                    (candidate) =>
+                      candidate.id === player.teammateId &&
+                      candidate.teammateId === player.id
+                  )
+                : null
+            if (teammate) {
+              if (preferredPlayers.length + 2 > PLAYERS_PER_COURT) continue
+              preferredPlayers.push(player, teammate)
+              preferredIds.add(player.id)
+              preferredIds.add(teammate.id)
+            } else {
+              preferredPlayers.push(player)
+              preferredIds.add(player.id)
+            }
+          }
 
           if (preferredPlayers.length === PLAYERS_PER_COURT) {
             const preferredResult = generateMatches(preferredPlayers, {
