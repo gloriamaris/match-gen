@@ -83,6 +83,48 @@ export function shouldSkipThroneForGamesGap({
   })
 }
 
+// Yield the throne back to the fairness queue when enough lower-game players
+// are waiting. Returns true when at least PLAYERS_PER_COURT court-eligible
+// sit-outs in a single skill group have fewer games than the staying winner(s),
+// meaning a legal court can be filled entirely from players who deserve it more.
+//
+// availablePlayers should already be filtered to court-eligible sit-outs
+// (checkedIn, not on another court, not on medal cooldown). Players from the
+// match just scored are excluded via lastMatchPlayerIds so winners/losers who
+// just played don't count toward the threshold.
+export function shouldYieldThroneToQueue({
+  stayingWinnerIds = [],
+  getPlayer,
+  availablePlayers = [],
+  lastMatchPlayerIds = [],
+}) {
+  if (stayingWinnerIds.length === 0) return false
+
+  const winnerGamesValues = stayingWinnerIds
+    .map((id) => getPlayer?.(id))
+    .filter(Boolean)
+    .map((player) => Number(player.gamesPlayed) || 0)
+
+  if (winnerGamesValues.length === 0) return false
+
+  const winnerGames = Math.min(...winnerGamesValues)
+  const lastMatchSet = new Set(lastMatchPlayerIds)
+
+  const groupCounts = new Map()
+  availablePlayers.forEach((player) => {
+    if (!player.checkedIn) return
+    if (lastMatchSet.has(player.id)) return
+    if ((Number(player.gamesPlayed) || 0) >= winnerGames) return
+    const group = skillGroupOf(player.skillLevel)
+    groupCounts.set(group, (groupCounts.get(group) || 0) + 1)
+  })
+
+  for (const count of groupCounts.values()) {
+    if (count >= PLAYERS_PER_COURT) return true
+  }
+  return false
+}
+
 export function applyGamesGapExclusions(players, excludeIds) {
   if (!excludeIds || excludeIds.size === 0) return players
   return players.map((player) =>

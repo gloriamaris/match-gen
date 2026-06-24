@@ -28,6 +28,7 @@ import {
   countAvailableEligiblePlayers,
   resolveGapExclusionsForCourtFill,
   shouldSkipThroneForGamesGap,
+  shouldYieldThroneToQueue,
 } from '../../match-engines/v2/gamesGap'
 import ShareStandingsModal from '../ShareStandingsModal'
 import V2CourtsView from './V2CourtsView'
@@ -431,25 +432,40 @@ export default function AppV2() {
               : (lastMatchOnCourt.teamBIds ?? [])
           const ejectedSet = new Set(lastMatchOnCourt.ejectedWinnerIds ?? [])
           const stayingWinnerIds = winnerIds.filter((id) => !ejectedSet.has(id))
+          const loserIds =
+            lastMatchOnCourt.winningTeam === 'A'
+              ? (lastMatchOnCourt.teamBIds ?? [])
+              : (lastMatchOnCourt.teamAIds ?? [])
+
+          const getPlayer = (id) => currentPlayers.find((pl) => pl.id === id)
 
           const skipThrone = shouldSkipThroneForGamesGap({
             enforceGap,
             maxAllowedGames,
             stayingWinnerIds,
-            getPlayer: (id) => currentPlayers.find((pl) => pl.id === id),
+            getPlayer,
             hasZeroGamesPlayerInPool: availableForCourt.some(
               (p) => (Number(p.gamesPlayed) || 0) === 0
             ),
           })
 
-          if (!skipThrone && stayingWinnerIds.length === 1) {
+          const yieldThrone = shouldYieldThroneToQueue({
+            stayingWinnerIds,
+            getPlayer,
+            availablePlayers: availableForCourt,
+            lastMatchPlayerIds: [...winnerIds, ...loserIds],
+          })
+
+          const skipThroneFinal = skipThrone || yieldThrone
+
+          if (!skipThroneFinal && stayingWinnerIds.length === 1) {
             generatedCourt = generateCourtAfterScore(effectivePlayers, {
               winnerIds: stayingWinnerIds,
               courtMatchups: courtMatchups ?? [],
               matchHistory,
               courts: numberOfCourts,
             })
-          } else if (!skipThrone && stayingWinnerIds.length === 2) {
+          } else if (!skipThroneFinal && stayingWinnerIds.length === 2) {
             generatedCourt = generateCourtAfterScore(effectivePlayers, {
               winnerIds: stayingWinnerIds,
               courtMatchups: courtMatchups ?? [],

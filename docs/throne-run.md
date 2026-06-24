@@ -61,6 +61,8 @@ Court generation is per-court only (there is no **Generate All Courts** button i
 
 * **Refresh one court** — generates a single court. For Throne Run, if that court has a recent scored match with **two** non-ejected winners, `generateCourtAfterScore` runs throne rotation (2-winner path, or 1-winner path after `selectPrimaryThroneWinner` when promotion split them across skill groups). If fewer than two winners stay (ejection) or there is no scored match on that court, Progressive Play's `generateMatches` fills the slot (using global fairness with `excludePlayerIds` for players on other courts).
 
+Throne rotation is also **skipped in favor of `generateMatches`** when a games-played fairness guard fires (see [Games-played fairness: skip and yield](#games-played-fairness-skip-and-yield)). In that case the winners leave the court and re-enter the fairness pool (where they are on cooldown from the match just played), so lower-game players are seated first.
+
 ## Score a match
 
 When a score is submitted in Throne Run mode:
@@ -77,6 +79,7 @@ Match ends → applyMatchResult
            → history saved (includes ejectedWinnerIds)
 
 Refresh court → last match on this court?
+                    games-gap skip OR yield to queue?        → generateMatches (PP)
                     yes + 2 staying winners → generateCourtAfterScore (2 winners)
                          └ same skill group → throne rotation
                          └ diff skill groups (returns null) → selectPrimaryThroneWinner
@@ -86,6 +89,18 @@ Refresh court → last match on this court?
                     still null after PP                     → generateFallbackCourtByPriority
                     still null after fallback               → error modal
 ```
+
+## Games-played fairness: skip and yield
+
+Before throne rotation runs on refresh, AppV2 evaluates two guards (in `src/match-engines/v2/gamesGap.js`). If **either** fires, throne rotation is skipped and Progressive Play's `generateMatches` fills the court instead. The staying winners are on cooldown from the match just played, so PP naturally seats rested, lower-game players.
+
+1. **`shouldSkipThroneForGamesGap`** — skips throne when any **zero-game** player is waiting in the pool, or (when the session gap is being enforced) when the staying winner is more than `V2_MAX_GAMES_GAP` games ahead of the session minimum.
+
+2. **`shouldYieldThroneToQueue`** — yields the court back to the queue when at least **4 court-eligible sit-outs in a single skill group** (Beginner+Novice or Intermediate+Advanced) have **fewer games** than the staying winner. The 4-in-one-group requirement guarantees those players can form a legal court on their own. Players from the match just scored are excluded from the count.
+
+   `winnerGames` is the **minimum** `gamesPlayed` among staying winners. A candidate counts only when `gamesPlayed < winnerGames` and they are checked in, not on another court, and not on medal cooldown.
+
+The yield rule applies **regardless of an active win streak** — fairness takes priority, and the winner's streak is unaffected because scoring already happened. The two guards are combined as `skipThrone || yieldThrone` in [src/components/v2/AppV2.jsx](../src/components/v2/AppV2.jsx).
 
 ## Throne rotation rule
 
@@ -144,7 +159,7 @@ Ejected winners **do not** stay on court, even though they won the match. The UI
 
 | Winners after match | Ejected | Court result |
 |---------------------|---------|--------------|
-| 2 | 0 | Refresh runs throne rotation (`generateCourtAfterScore`) |
+| 2 | 0 | Refresh runs throne rotation (`generateCourtAfterScore`), unless a games-gap guard skips/yields to PP |
 | 2 | 1 | Refresh uses PP `generateMatches` (only 1 staying winner — throne rotation requires 2) |
 | 2 | 2 | Refresh uses PP `generateMatches` (both ejected) |
 

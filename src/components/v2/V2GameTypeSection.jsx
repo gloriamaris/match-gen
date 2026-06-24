@@ -24,7 +24,7 @@ const GAME_TYPE_OPTIONS = [
     id: V2_GAME_TYPES.THRONE_RUN,
     label: 'Throne Run',
     description:
-      'One winner holds the court after each match, gets new partners each round, and may leave after hitting the win streak limit.',
+      'Winners may stay on court with new partners, or yield when enough lower-game players are waiting.',
   },
 ]
 

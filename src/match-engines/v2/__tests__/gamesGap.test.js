@@ -4,6 +4,7 @@ import {
   buildGamesGapExclusions,
   getSessionGamesStats,
   shouldSkipThroneForGamesGap,
+  shouldYieldThroneToQueue,
   applyGamesGapExclusions,
   resolveGapExclusionsForCourtFill,
   countAvailableEligiblePlayers,
@@ -122,6 +123,134 @@ describe('shouldSkipThroneForGamesGap', () => {
         stayingWinnerIds: ['throne'],
         getPlayer: (id) => within.get(id),
         hasZeroGamesPlayerInPool: false,
+      })
+    ).toBe(false)
+  })
+})
+
+describe('shouldYieldThroneToQueue', () => {
+  const winner = (games) =>
+    new Map([['throne', player('throne', games, { skillLevel: 'Novice' })]])
+  const getFrom = (map) => (id) => map.get(id)
+
+  it('yields when >= 4 lower-game sit-outs share one skill group', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Beginner' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 2, { skillLevel: 'Beginner' }),
+      player('d', 0, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(true)
+  })
+
+  it('does not yield when fewer than 4 lower-game sit-outs exist', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice' }),
+      player('b', 2, { skillLevel: 'Novice' }),
+      player('c', 0, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it('does not yield when 4 lower-game players are split across groups', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Beginner' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Intermediate' }),
+      player('d', 1, { skillLevel: 'Advanced' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it('excludes players with games equal to or above the winner', () => {
+    const winners = winner(2)
+    const available = [
+      player('a', 2, { skillLevel: 'Novice' }),
+      player('b', 3, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 0, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it('excludes players from the match just scored', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('justPlayed', 1, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: ['justPlayed'],
+      })
+    ).toBe(false)
+  })
+
+  it('uses the minimum games among staying winners', () => {
+    const winners = new Map([
+      ['w1', player('w1', 4, { skillLevel: 'Novice' })],
+      ['w2', player('w2', 2, { skillLevel: 'Novice' })],
+    ])
+    const available = [
+      player('a', 1, { skillLevel: 'Novice' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 3, { skillLevel: 'Novice' }),
+    ]
+    // winnerGames = min(4, 2) = 2, so only a/b/c (1 game) qualify -> 3 < 4
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['w1', 'w2'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it('returns false when there are no staying winners', () => {
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: [],
+        getPlayer: () => undefined,
+        availablePlayers: [],
+        lastMatchPlayerIds: [],
       })
     ).toBe(false)
   })
