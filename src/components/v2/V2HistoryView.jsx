@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
+import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../formatStoredMatchDate'
 
 const SCORE_OPTIONS = Array.from({ length: 16 }, (_, i) => i)
 
@@ -154,9 +155,7 @@ export default function V2HistoryView({
 
   const isEditing = Boolean(editingMatchId)
 
-  const sortedHistory = [...matchHistory].sort((a, b) =>
-    String(a.teamA ?? '').localeCompare(String(b.teamA ?? ''))
-  )
+  const sortedHistory = sortMatchHistoryChronologically(matchHistory)
 
   return (
     <div className="space-y-4">
@@ -215,6 +214,7 @@ export default function V2HistoryView({
               <th className="px-4 py-3">Team B</th>
               <th className="px-4 py-3">Score</th>
               <th className="px-4 py-3">Verified</th>
+              <th className="px-4 py-3">Date & Time</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -223,7 +223,7 @@ export default function V2HistoryView({
               <tr>
                 <td
                   className="px-4 py-6 text-center text-sm text-slate-500"
-                  colSpan={7}
+                  colSpan={8}
                 >
                   No games recorded yet.
                 </td>
@@ -259,6 +259,9 @@ export default function V2HistoryView({
                     </td>
                     <td className="px-4 py-3">{scoreString || '—'}</td>
                     <td className="px-4 py-3">{match.enteredBy || '—'}</td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {formatStoredMatchDate(match.timestamp)}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       <button
                         type="button"

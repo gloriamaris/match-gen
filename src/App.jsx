@@ -25,6 +25,7 @@ import * as splitStayRandomEngine from './match-engines/SplitStayDoublesRandom.e
 import * as winnerLoserQueueEngine from './match-engines/WinnerLoserQueueDoubles.engine'
 import matchEnginePlainDoc from '../docs/match-engine-plain.md?raw'
 import standingsPlainDoc from '../docs/standings-plain.md?raw'
+import { formatStoredMatchDate, sortMatchHistoryChronologically } from './formatStoredMatchDate'
 
 const STORAGE_KEYS = {
   players: 'matchGen.players',
@@ -1935,6 +1936,7 @@ function App() {
         score: `${scoreA} - ${scoreB}`,
         enteredBy: manualMatchModal.verifiedBy.trim(),
         signature: '',
+        timestamp: Date.now(),
       },
       ...prev,
     ])
@@ -2189,6 +2191,7 @@ function App() {
         teamBName: teamBKey,
         score: `${scoreA} - ${scoreB}`,
         enteredBy: scoreModal.enteredBy.trim(),
+        timestamp: Date.now(),
       },
       ...prev,
     ])
@@ -2431,13 +2434,14 @@ function App() {
 
   const exportHistoryCsv = () => {
     const rows = [
-      ['Court', 'Team A', 'Team B', 'Score', 'Verified By'],
-      ...matchHistory.map((match) => [
+      ['Court', 'Team A', 'Team B', 'Score', 'Verified By', 'Date & Time'],
+      ...sortMatchHistoryChronologically(matchHistory).map((match) => [
         match.court,
         match.teamA,
         match.teamB,
         match.score,
         match.enteredBy || '',
+        formatStoredMatchDate(match.timestamp),
       ]),
     ]
     downloadCsv('match-history.csv', rows)

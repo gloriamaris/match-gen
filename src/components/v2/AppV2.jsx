@@ -31,6 +31,7 @@ import {
   shouldYieldThroneToQueue,
 } from '../../match-engines/v2/gamesGap'
 import ShareStandingsModal from '../ShareStandingsModal'
+import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../formatStoredMatchDate'
 import V2CourtsView from './V2CourtsView'
 import V2EditCourtModal from './V2EditCourtModal'
 import V2GameSetupPage from './V2GameSetupPage'
@@ -1034,13 +1035,14 @@ export default function AppV2() {
 
   const exportHistoryCsv = () => {
     const rows = [
-      ['Court', 'Team A', 'Team B', 'Score', 'Verified By'],
-      ...matchHistory.map((match) => [
+      ['Court', 'Team A', 'Team B', 'Score', 'Verified By', 'Date & Time'],
+      ...sortMatchHistoryChronologically(matchHistory).map((match) => [
         match.court,
         match.teamA,
         match.teamB,
         match.score,
         match.enteredBy || '',
+        formatStoredMatchDate(match.timestamp),
       ]),
     ]
     downloadCsv('match-history.csv', rows)

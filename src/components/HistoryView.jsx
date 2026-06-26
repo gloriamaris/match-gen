@@ -1,5 +1,6 @@
 import React from 'react'
 import { Trash2 } from 'lucide-react'
+import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../formatStoredMatchDate'
 
 export default function HistoryView({
   matchHistory,
@@ -84,6 +85,7 @@ export default function HistoryView({
               <th className="px-4 py-3">Team B</th>
               <th className="px-4 py-3">Score</th>
               <th className="px-4 py-3">Verified</th>
+              <th className="px-4 py-3">Date & Time</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
@@ -91,15 +93,13 @@ export default function HistoryView({
               <tr>
                 <td
                   className="px-4 py-6 text-center text-sm text-slate-500"
-                  colSpan={6}
+                  colSpan={7}
                 >
                   No games recorded yet.
                 </td>
               </tr>
             ) : (
-              [...matchHistory]
-                .sort((a, b) => a.teamA.localeCompare(b.teamA))
-                .map((match, index) => {
+              sortMatchHistoryChronologically(matchHistory).map((match, index) => {
                 const [scoreA, scoreB] = match.score
                   .split('-')
                   .map((value) => Number.parseInt(value.trim(), 10))
@@ -131,6 +131,9 @@ export default function HistoryView({
                     <td className="px-4 py-3">{match.score}</td>
                     <td className="px-4 py-3">
                       {match.enteredBy || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {formatStoredMatchDate(match.timestamp)}
                     </td>
                   </tr>
                 )
