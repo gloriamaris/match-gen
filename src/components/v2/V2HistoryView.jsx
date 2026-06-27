@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
 import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../formatStoredMatchDate'
 
@@ -61,12 +61,14 @@ export default function V2HistoryView({
   players = [],
   onAddMatch,
   onEditMatch,
+  onImportMatchHistory,
   historyTableRef,
   exportMenuOpen,
   setExportMenuOpen,
   onExportCsv,
   onExportPdf,
 }) {
+  const importInputRef = useRef(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingMatchId, setEditingMatchId] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
@@ -160,6 +162,24 @@ export default function V2HistoryView({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end gap-2">
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={async (event) => {
+            const [file] = event.target.files || []
+            await onImportMatchHistory?.(file)
+            event.target.value = ''
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => importInputRef.current?.click()}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+        >
+          Import
+        </button>
         <div className="relative">
           <button
             type="button"

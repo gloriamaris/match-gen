@@ -32,6 +32,7 @@ import {
 } from '../../match-engines/v2/gamesGap'
 import ShareStandingsModal from '../ShareStandingsModal'
 import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../formatStoredMatchDate'
+import { parseMatchHistoryCsv } from '../../importMatchHistoryCsv'
 import V2CourtsView from './V2CourtsView'
 import V2EditCourtModal from './V2EditCourtModal'
 import V2GameSetupPage from './V2GameSetupPage'
@@ -861,6 +862,75 @@ export default function AppV2() {
     }
   }
 
+  const handleImportMatchHistory = async (file) => {
+    if (!file) return
+
+    const text = await file.text()
+    const { matches, error } = parseMatchHistoryCsv(text, { players })
+
+    if (error) {
+      setToastMessage(error)
+      return
+    }
+
+    let currentPlayers = players
+    const importedEntries = []
+    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+
+    matches.forEach((match) => {
+      const winningTeam = match.scoreA > match.scoreB ? 'A' : 'B'
+      const { players: updatedPlayers, historyEntry } = isRoundRobin
+        ? rrApplyMatchResult(currentPlayers, {
+            courtIndex: null,
+            teamAIds: match.teamAIds,
+            teamBIds: match.teamBIds,
+            winningTeam,
+          })
+        : applyMatchResult(
+            currentPlayers,
+            {
+              courtIndex: null,
+              teamAIds: match.teamAIds,
+              teamBIds: match.teamBIds,
+              winningTeam,
+            },
+            { skillAdjustment }
+          )
+
+      currentPlayers = updatedPlayers
+      importedEntries.push({
+        ...historyEntry,
+        id:
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `match-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        court: match.court,
+        teamA: match.teamA,
+        teamB: match.teamB,
+        score: `${match.scoreA} - ${match.scoreB}`,
+        enteredBy: match.enteredBy,
+        timestamp: match.timestamp ?? historyEntry.timestamp,
+      })
+    })
+
+    setPlayers(currentPlayers)
+    saveV2Players(currentPlayers)
+
+    const nextHistory = [...matchHistory, ...importedEntries]
+    setMatchHistory(nextHistory)
+    saveV2MatchHistory(nextHistory)
+
+    setToastMessage(
+      `Imported ${importedEntries.length} match${
+        importedEntries.length === 1 ? '' : 'es'
+      }`
+    )
+
+    if (isRoundRobinComplete(currentPlayers)) {
+      showRoundRobinCompleteModal()
+    }
+  }
+
   const handleEditMatch = ({
     matchId,
     court,
@@ -1278,6 +1348,7 @@ export default function AppV2() {
             players={players}
             onAddMatch={handleAddManualMatch}
             onEditMatch={handleEditMatch}
+            onImportMatchHistory={handleImportMatchHistory}
             historyTableRef={historyTableRef}
             exportMenuOpen={exportMenuOpen}
             setExportMenuOpen={setExportMenuOpen}
