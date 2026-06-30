@@ -1,12 +1,15 @@
-import React, { useMemo, useRef } from 'react'
-import { Check, Pencil, RefreshCw } from 'lucide-react'
+import React, { useMemo, useState } from 'react'
+import { Check, ChevronDown, ChevronUp, Pencil, RefreshCw } from 'lucide-react'
 import {
   getCooldownIds,
-  selectFairnessPool,
-  shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
+import {
+  buildProgressivePlayUpNextPreview,
+  isProgressivePlayFreezeValid,
+  mergeFrozenUpNextDisplay,
+} from '../../match-engines/v2/progressivePlayCourtRefresh'
 import { computeRoundRobinMatchupProgress } from '../../match-engines/v2/RoundRobin.engine'
-import { V2_GAME_TYPES } from './v2Storage'
+import { loadV2Players, V2_GAME_TYPES } from './v2Storage'
 
 const SKILL_RANK = {
   beginner: 0,
@@ -69,25 +72,6 @@ const groupPlayersBySkillLevel = (playerList, { preserveOrder = false } = {}) =>
     }
   }).filter((group) => group.players.length > 0)
 
-const groupPlayersBySkillLevelInPickOrder = (playerList, pickOrderPlayers) => {
-  const pickIndex = new Map(pickOrderPlayers.map((player, index) => [player.id, index]))
-  const sortByPickOrder = (a, b) =>
-    (pickIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-    (pickIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER)
-
-  return SKILL_LEVEL_ORDER.map((skillLevel) => {
-    const players = playerList
-      .filter((player) => getNormalizedSkillLevel(player) === skillLevel)
-      .sort(sortByPickOrder)
-    return {
-      skillLevel,
-      label: getSkillLabel(skillLevel),
-      stars: SKILL_STARS_BY_LEVEL[skillLevel],
-      players,
-    }
-  }).filter((group) => group.players.length > 0)
-}
-
 const getTeamSkillStars = (teamPlayers) => {
   if (!Array.isArray(teamPlayers) || teamPlayers.length === 0) {
     return SKILL_STARS_BY_LEVEL.beginner
@@ -148,12 +132,14 @@ export default function V2CourtsView({
   matchHistory = [],
   checkedInCount = 0,
   winStreak = 0,
-  lockUpNext = false,
+  allowAdjacentSkillMixing = true,
+  progressivePlayFreeze = null,
   onGenerateCourt = noop,
   onEditCourt = noop,
   onOpenScore = noop,
 }) {
   const minPlayers = gameMode === 'singles' ? 2 : 4
+  const [isUpNextExpanded, setIsUpNextExpanded] = useState(true)
   if (numberOfCourts <= 0) {
     return null
   }
@@ -187,36 +173,31 @@ export default function V2CourtsView({
   const sittingOutGroups = groupPlayersBySkillLevel(sittingOutPlayers)
   const cooldownGroups = groupPlayersBySkillLevel(cooldownPlayers)
 
-  const eligiblePlayers = checkedInPlayers.filter((p) => !onCourtIds.has(p.id))
-  const useCheckInOrder = shouldUseCheckInOrder(eligiblePlayers, matchHistory)
-  const { selected: liveUpNextPlayers } =
-    eligiblePlayers.length >= minPlayers
-      ? selectFairnessPool(eligiblePlayers, numberOfCourts, matchHistory, {
-          useCheckInOrder,
-          cooldownSlots: numberOfCourts,
-        })
-      : { selected: [] }
-  const liveUpNextGroups = groupPlayersBySkillLevelInPickOrder(
-    liveUpNextPlayers,
-    liveUpNextPlayers
-  )
+  // Preview uses the same refresh path as Generate for the first empty court.
+  const rosterPlayers = loadV2Players()
+  const isProgressivePlay = gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
+  const upNextPreview = isProgressivePlay
+    ? buildProgressivePlayUpNextPreview(rosterPlayers, {
+        courtMatchups,
+        numberOfCourts,
+        matchHistory,
+        allowAdjacentSkillMixing,
+      })
+    : null
 
-  const upNextSnapshotRef = useRef({
-    players: liveUpNextPlayers,
-    groups: liveUpNextGroups,
-  })
-  if (!lockUpNext) {
-    upNextSnapshotRef.current = {
-      players: liveUpNextPlayers,
-      groups: liveUpNextGroups,
-    }
-  }
-  const upNextPlayers = lockUpNext
-    ? upNextSnapshotRef.current.players
-    : liveUpNextPlayers
-  const upNextGroups = lockUpNext
-    ? upNextSnapshotRef.current.groups
-    : liveUpNextGroups
+  // When a valid freeze exists, the frozen block leads the queue and only the
+  // tail below it re-sorts. Otherwise fall back to the live preview ordering.
+  const freezeActive =
+    isProgressivePlay &&
+    isProgressivePlayFreezeValid(progressivePlayFreeze, rosterPlayers, courtMatchups)
+  const upNextPlayers = freezeActive
+    ? mergeFrozenUpNextDisplay(progressivePlayFreeze, upNextPreview, rosterPlayers)
+    : (upNextPreview?.queue ?? [])
+  const upNextOnDeckIds = new Set(
+    freezeActive
+      ? progressivePlayFreeze.queueIds.slice(0, 4)
+      : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)
+  )
 
   const playersWithMedals = checkedInPlayers
     .filter((p) => (Number(p.medals) || 0) > 0)
@@ -349,27 +330,87 @@ export default function V2CourtsView({
               aria-labelledby="up-next-heading"
               className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm"
             >
-              <div className="border-b border-amber-200 px-4 py-3 sm:px-5">
-                <h2
-                  id="up-next-heading"
-                  className="text-sm font-semibold text-slate-900"
-                >
-                  Up Next ({upNextPlayers.length})
-                </h2>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY
-                    ? 'Grouped by skill level, ordered by fairness priority — excludes players currently on court'
-                    : 'Prioritized for the next refresh — excludes players currently on court'}
-                </p>
-              </div>
-              <div className="p-4 sm:p-5">
-                <V2PlayerStatusGroups
-                  groups={upNextGroups}
-                  groupHeadingClassName="text-amber-600"
-                  chipClassName="inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800"
-                  gamesClassName="ml-1 font-normal text-amber-500"
-                />
-              </div>
+              <button
+                type="button"
+                onClick={() => setIsUpNextExpanded((prev) => !prev)}
+                className={`flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition hover:bg-amber-50/50 sm:px-5 ${
+                  isUpNextExpanded ? 'border-b border-amber-200' : ''
+                }`}
+                aria-expanded={isUpNextExpanded}
+                aria-controls="up-next-panel"
+              >
+                <div className="min-w-0 flex-1">
+                  <h2
+                    id="up-next-heading"
+                    className="text-sm font-semibold text-slate-900"
+                  >
+                    Up Next ({upNextPlayers.length})
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {freezeActive
+                      ? 'Highlighted players are locked in and fill the next court when you generate. The rest stay in order until then; players further down may shift as scores come in.'
+                      : 'Fairness-ordered queue — the highlighted players fill the next court when you generate, the rest follow in priority order'}
+                  </p>
+                </div>
+                {isUpNextExpanded ? (
+                  <ChevronUp
+                    className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <ChevronDown
+                    className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+              {isUpNextExpanded ? (
+                <div id="up-next-panel" className="p-4 sm:p-5">
+                  <ol className="space-y-1.5">
+                    {upNextPlayers.map((player, index) => {
+                      const isOnDeck = upNextOnDeckIds.has(player.id)
+                      return (
+                        <li
+                          key={player.id}
+                          className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                            isOnDeck
+                              ? 'border-amber-300 bg-amber-50 text-amber-900'
+                              : 'border-slate-200 bg-white text-slate-600'
+                          }`}
+                        >
+                          <span
+                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                              isOnDeck
+                                ? 'bg-amber-200 text-amber-800'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span>{player.name}</span>
+                            <span
+                              className={`ml-1.5 font-normal ${
+                                isOnDeck ? 'text-amber-600' : 'text-slate-400'
+                              }`}
+                            >
+                              {getSkillLabel(player.skillLevel)}{' '}
+                              {SKILL_STARS_BY_LEVEL[getNormalizedSkillLevel(player)]}
+                            </span>
+                          </span>
+                          <span
+                            className={`font-normal ${
+                              isOnDeck ? 'text-amber-500' : 'text-slate-400'
+                            }`}
+                          >
+                            ({Number(player.gamesPlayed) || 0})
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                </div>
+              ) : null}
             </section>
           ) : null}
 

@@ -18,6 +18,8 @@ import {
   matchSignature,
   performanceScore,
   selectFairnessPool,
+  buildUpNextQueue,
+  takePairAwareCourtFill,
   shiftSkillLevel,
   skillGroupOf,
   teamPerformanceScore,
@@ -2474,5 +2476,190 @@ describe('session simulation — games-played fairness', () => {
     const checkedIn = players.filter((p) => p.checkedIn)
     expect(checkedIn.every((p) => (Number(p.gamesPlayed) || 0) >= 1)).toBe(true)
     expect(gamesSpread(checkedIn)).toBeLessThanOrEqual(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildUpNextQueue — shared Up Next / empty-court selection
+// ---------------------------------------------------------------------------
+
+describe('takePairAwareCourtFill', () => {
+  it('takes the first N players in order when there are no pairs', () => {
+    const pool = Array.from({ length: 6 }, (_, i) => makePlayer(`P${i}`))
+    const fill = takePairAwareCourtFill(pool, 4)
+    expect(fill.map((p) => p.id)).toEqual(['P0', 'P1', 'P2', 'P3'])
+  })
+
+  it('keeps a mutual locked pair together across the slice boundary', () => {
+    // Pair sits at indices 2 and 5; pulling the partner forward keeps them
+    // together within the 4-player fill.
+    const [a, b] = makePair('A', 'B')
+    const pool = [
+      makePlayer('P0'),
+      makePlayer('P1'),
+      a,
+      makePlayer('P3'),
+      makePlayer('P4'),
+      b,
+    ]
+    const fill = takePairAwareCourtFill(pool, 4)
+    expect(fill).toHaveLength(4)
+    const ids = fill.map((p) => p.id)
+    expect(ids).toContain('A')
+    expect(ids).toContain('B')
+  })
+
+  it('skips a pair that cannot fit and keeps filling with solos', () => {
+    // Pair starts at index 3, only one slot left -> pair is skipped, next solo
+    // fills the final slot instead of splitting the pair.
+    const [a, b] = makePair('A', 'B')
+    const pool = [
+      makePlayer('P0'),
+      makePlayer('P1'),
+      makePlayer('P2'),
+      a,
+      b,
+      makePlayer('P5'),
+    ]
+    const fill = takePairAwareCourtFill(pool, 4)
+    expect(fill.map((p) => p.id)).toEqual(['P0', 'P1', 'P2', 'P5'])
+  })
+})
+
+describe('buildUpNextQueue', () => {
+  it('returns empty queue/preferred when fewer than a court of eligible players', () => {
+    const players = Array.from({ length: 3 }, (_, i) => makePlayer(`P${i}`))
+    const { queue, preferred } = buildUpNextQueue(players, { courts: 1 })
+    expect(queue).toEqual([])
+    expect(preferred).toEqual([])
+  })
+
+  it('orders the queue by fairness priority (fewest games first)', () => {
+    const players = Array.from({ length: 8 }, (_, i) =>
+      makePlayer(`P${i}`, { gamesPlayed: i })
+    )
+    const { queue } = buildUpNextQueue(players, { courts: 1 })
+    const games = queue.map((p) => Number(p.gamesPlayed) || 0)
+    const sorted = [...games].sort((a, b) => a - b)
+    expect(games).toEqual(sorted)
+  })
+
+  it('leads the queue with the pair-aware preferred four', () => {
+    const players = Array.from({ length: 8 }, (_, i) =>
+      makePlayer(`P${i}`, { gamesPlayed: i })
+    )
+    const { queue, preferred } = buildUpNextQueue(players, { courts: 1 })
+    expect(preferred).toHaveLength(4)
+    expect(queue.slice(0, 4).map((p) => p.id)).toEqual(
+      preferred.map((p) => p.id)
+    )
+  })
+
+  it('excludes players already on other courts', () => {
+    const players = Array.from({ length: 12 }, (_, i) =>
+      makePlayer(`P${i}`, { gamesPlayed: i })
+    )
+    const { queue } = buildUpNextQueue(players, {
+      courts: 2,
+      excludePlayerIds: ['P0', 'P1', 'P2', 'P3'],
+    })
+    const ids = new Set(queue.map((p) => p.id))
+    ;['P0', 'P1', 'P2', 'P3'].forEach((id) => expect(ids.has(id)).toBe(false))
+  })
+
+  it('excludes games-gap players', () => {
+    const players = Array.from({ length: 8 }, (_, i) =>
+      makePlayer(`P${i}`, { gamesPlayed: i })
+    )
+    const { queue } = buildUpNextQueue(players, {
+      courts: 1,
+      gapExcludeIds: ['P6', 'P7'],
+    })
+    const ids = new Set(queue.map((p) => p.id))
+    expect(ids.has('P6')).toBe(false)
+    expect(ids.has('P7')).toBe(false)
+  })
+
+  it('ignores players who are not checked in', () => {
+    const players = [
+      ...Array.from({ length: 4 }, (_, i) => makePlayer(`P${i}`)),
+      makePlayer('OUT', { checkedIn: false }),
+    ]
+    const { queue } = buildUpNextQueue(players, { courts: 1 })
+    expect(queue.map((p) => p.id)).not.toContain('OUT')
+  })
+
+  it('keeps a mutual locked pair together in the preferred four', () => {
+    const [a, b] = makePair('A', 'B', { gamesPlayed: 0 })
+    const players = [
+      a,
+      b,
+      ...Array.from({ length: 6 }, (_, i) => makePlayer(`P${i}`, { gamesPlayed: 1 })),
+    ]
+    const { preferred } = buildUpNextQueue(players, { courts: 1 })
+    const ids = preferred.map((p) => p.id)
+    expect(ids).toContain('A')
+    expect(ids).toContain('B')
+  })
+
+  it('preferred four match the players generateMatches places on the court', () => {
+    const players = Array.from({ length: 10 }, (_, i) =>
+      makePlayer(`P${i}`, { gamesPlayed: i })
+    )
+    const { preferred } = buildUpNextQueue(players, { courts: 1 })
+    expect(preferred).toHaveLength(4)
+
+    const result = generateMatches(preferred, { courts: 1 })
+    expect(result.courts).toHaveLength(1)
+    const courtIds = new Set(allPlayerIds(result))
+    preferred.forEach((p) => expect(courtIds.has(p.id)).toBe(true))
+  })
+
+  it('orders by check-in queue before the first match when players arrive at different times', () => {
+    const players = [
+      makePlayer('third', { queueOrder: 3 }),
+      makePlayer('first', { queueOrder: 1 }),
+      makePlayer('fourth', { queueOrder: 4 }),
+      makePlayer('second', { queueOrder: 2 }),
+      makePlayer('fifth', { queueOrder: 5 }),
+      makePlayer('sixth', { queueOrder: 6 }),
+    ]
+    const { queue, preferred } = buildUpNextQueue(players, { courts: 1 })
+
+    expect(preferred.map((player) => player.id)).toEqual([
+      'first',
+      'second',
+      'third',
+      'fourth',
+    ])
+    expect(queue.map((player) => player.id)).toEqual([
+      'first',
+      'second',
+      'third',
+      'fourth',
+      'fifth',
+      'sixth',
+    ])
+  })
+
+  it('keeps check-in order for locked pairs checked in after earlier solos', () => {
+    const [lateA, lateB] = makePair('lateA', 'lateB', { queueOrder: 3 })
+    lateB.queueOrder = 4
+    const players = [
+      makePlayer('first', { queueOrder: 1 }),
+      makePlayer('second', { queueOrder: 2 }),
+      lateA,
+      lateB,
+      makePlayer('fifth', { queueOrder: 5 }),
+      makePlayer('sixth', { queueOrder: 6 }),
+    ]
+    const { preferred } = buildUpNextQueue(players, { courts: 1 })
+
+    expect(preferred.map((player) => player.id)).toEqual([
+      'first',
+      'second',
+      'lateA',
+      'lateB',
+    ])
   })
 })

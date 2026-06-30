@@ -254,6 +254,124 @@ describe('shouldYieldThroneToQueue', () => {
       })
     ).toBe(false)
   })
+
+  const getFromAll = (map, players = []) => (id) =>
+    map.get(id) ?? players.find((p) => p.id === id)
+
+  it('does not yield when every partner partition repeats a pairing', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice', partnerCounts: { b: 1, c: 1, d: 1 } }),
+      player('b', 1, { skillLevel: 'Novice', partnerCounts: { a: 1, c: 1, d: 1 } }),
+      player('c', 1, { skillLevel: 'Novice', partnerCounts: { a: 1, b: 1, d: 1 } }),
+      player('d', 1, { skillLevel: 'Novice', partnerCounts: { a: 1, b: 1, c: 1 } }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
+
+  it('yields when one fresh-partner quartet exists among extra sit-outs', () => {
+    const winners = winner(3)
+    // a/b/c/d are fully fresh; e has partnered everyone, so only {a,b,c,d} works
+    const available = [
+      player('a', 1, { skillLevel: 'Novice' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 1, { skillLevel: 'Novice' }),
+      player('e', 1, {
+        skillLevel: 'Novice',
+        partnerCounts: { a: 1, b: 1, c: 1, d: 1 },
+      }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(true)
+  })
+
+  it('yields on fresh partners even when all opponent pairings repeat', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice', opponentCounts: { b: 1, c: 1, d: 1 } }),
+      player('b', 1, { skillLevel: 'Novice', opponentCounts: { a: 1, c: 1, d: 1 } }),
+      player('c', 1, { skillLevel: 'Novice', opponentCounts: { a: 1, b: 1, d: 1 } }),
+      player('d', 1, { skillLevel: 'Novice', opponentCounts: { a: 1, b: 1, c: 1 } }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(true)
+  })
+
+  it('yields when partners and opponents are both fresh', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 1, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFrom(winners),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(true)
+  })
+
+  it('yields with one locked pair and two fresh solos in the group', () => {
+    const winners = winner(3)
+    const available = [
+      player('a', 1, { skillLevel: 'Novice', teammateId: 'b' }),
+      player('b', 1, { skillLevel: 'Novice', teammateId: 'a' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 1, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFromAll(winners, available),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(true)
+  })
+
+  it('does not count a quartet whose locked partner is not present', () => {
+    const winners = winner(3)
+    // a is locked to x, but x is on another court (not in availablePlayers)
+    const x = player('x', 1, { skillLevel: 'Novice', teammateId: 'a' })
+    const available = [
+      player('a', 1, { skillLevel: 'Novice', teammateId: 'x' }),
+      player('b', 1, { skillLevel: 'Novice' }),
+      player('c', 1, { skillLevel: 'Novice' }),
+      player('d', 1, { skillLevel: 'Novice' }),
+    ]
+    expect(
+      shouldYieldThroneToQueue({
+        stayingWinnerIds: ['throne'],
+        getPlayer: getFromAll(winners, [...available, x]),
+        availablePlayers: available,
+        lastMatchPlayerIds: [],
+      })
+    ).toBe(false)
+  })
 })
 
 describe('applyGamesGapExclusions', () => {

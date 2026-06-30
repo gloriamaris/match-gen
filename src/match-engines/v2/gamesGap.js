@@ -10,7 +10,13 @@
 // exclusions are relaxed for sit-out players in that group: same skill level
 // first, then one rank below, then one rank above (never crossing groups).
 
-import { skillGroupOf, skillRankOf } from './ProgressivePlay.engine'
+import {
+  skillGroupOf,
+  skillRankOf,
+  hasPartneredBefore,
+  hasOpposedBefore,
+  identifyLockedTeams,
+} from './ProgressivePlay.engine'
 
 export const V2_MAX_GAMES_GAP = 2
 export const PLAYERS_PER_COURT = 4
@@ -67,6 +73,23 @@ export function buildGamesGapExclusions(players, options = {}) {
   }
 }
 
+// Shared exclusion set for Up Next preview and empty-court generation so both
+// paths filter the same eligible pool (games-gap, medals, relaxation).
+export function resolveProgressivePlayQueueExclusions(players, options = {}) {
+  const { otherCourtPlayerIds = [], medalExcludeIds = [] } = options
+  const { gapExcludeIds, allExcludeIds, enforceGap } = buildGamesGapExclusions(
+    players,
+    { medalExcludeIds }
+  )
+  return resolveGapExclusionsForCourtFill(players, {
+    gapExcludeIds,
+    allExcludeIds,
+    medalExcludeIds,
+    otherCourtPlayerIds,
+    enforceGap,
+  })
+}
+
 export function shouldSkipThroneForGamesGap({
   enforceGap,
   maxAllowedGames,
@@ -83,10 +106,109 @@ export function shouldSkipThroneForGamesGap({
   })
 }
 
+// Resolve a player's mutual locked partner, or null when the teammateId is
+// missing, one-way, or points at an unknown player. getPlayer resolves across
+// the whole roster so a partner on another court is still detected.
+const mutualLockedPartner = (player, getPlayer) => {
+  if (!player.teammateId) return null
+  const teammate = getPlayer?.(player.teammateId)
+  if (!teammate || teammate.teammateId !== player.id) return null
+  return teammate
+}
+
+// A quartet is only countable when every locked player has their partner inside
+// it. A sit-out whose locked partner is elsewhere cannot complete this court.
+const isLockedPairComplete = (four, getPlayer) => {
+  const quartetIds = new Set(four.map((player) => player.id))
+  return four.every((player) => {
+    const teammate = mutualLockedPartner(player, getPlayer)
+    if (!teammate) return true
+    return quartetIds.has(teammate.id)
+  })
+}
+
+const isValidPartnerPair = (a, b) => {
+  if (a.teammateId === b.id && b.teammateId === a.id) return true
+  return !hasPartneredBefore(a, b)
+}
+
+// Enumerate the ways to split four players into two teams where both teammate
+// pairs are fresh (or locked). Locked pairs are kept intact as a single team.
+const enumerateFreshPartnerMatchups = (four) => {
+  const { lockedTeams } = identifyLockedTeams(four)
+
+  if (lockedTeams.length === 2) {
+    return [
+      { teamA: lockedTeams[0].players, teamB: lockedTeams[1].players },
+    ]
+  }
+
+  if (lockedTeams.length === 1) {
+    const lockedIds = new Set(lockedTeams[0].players.map((p) => p.id))
+    const solos = four.filter((player) => !lockedIds.has(player.id))
+    if (solos.length !== 2) return []
+    if (!isValidPartnerPair(solos[0], solos[1])) return []
+    return [{ teamA: lockedTeams[0].players, teamB: solos }]
+  }
+
+  const [a, b, c, d] = four
+  const partitions = [
+    [[a, b], [c, d]],
+    [[a, c], [b, d]],
+    [[a, d], [b, c]],
+  ]
+  return partitions
+    .filter(
+      ([teamA, teamB]) =>
+        isValidPartnerPair(teamA[0], teamA[1]) &&
+        isValidPartnerPair(teamB[0], teamB[1])
+    )
+    .map(([teamA, teamB]) => ({ teamA, teamB }))
+}
+
+const hasFreshOpponents = (teamA, teamB) =>
+  teamA.every((playerA) =>
+    teamB.every((playerB) => !hasOpposedBefore(playerA, playerB))
+  )
+
+// True when some four eligible sit-outs in this skill group can form a court
+// with fresh teammate pairs. Returns immediately when an opponent-fresh court
+// exists; otherwise falls back to any fresh-partner court.
+const groupHasYieldableQuorum = (eligibleInGroup, getPlayer) => {
+  const n = eligibleInGroup.length
+  if (n < PLAYERS_PER_COURT) return false
+
+  let foundFreshPartners = false
+  for (let i = 0; i < n - 3; i += 1) {
+    for (let j = i + 1; j < n - 2; j += 1) {
+      for (let k = j + 1; k < n - 1; k += 1) {
+        for (let l = k + 1; l < n; l += 1) {
+          const four = [
+            eligibleInGroup[i],
+            eligibleInGroup[j],
+            eligibleInGroup[k],
+            eligibleInGroup[l],
+          ]
+          if (!isLockedPairComplete(four, getPlayer)) continue
+          const matchups = enumerateFreshPartnerMatchups(four)
+          if (matchups.length === 0) continue
+          foundFreshPartners = true
+          for (const { teamA, teamB } of matchups) {
+            if (hasFreshOpponents(teamA, teamB)) return true
+          }
+        }
+      }
+    }
+  }
+  return foundFreshPartners
+}
+
 // Yield the throne back to the fairness queue when enough lower-game players
-// are waiting. Returns true when at least PLAYERS_PER_COURT court-eligible
-// sit-outs in a single skill group have fewer games than the staying winner(s),
-// meaning a legal court can be filled entirely from players who deserve it more.
+// are waiting. Returns true when four court-eligible sit-outs in a single skill
+// group (with fewer games than the staying winner(s)) can form a court with
+// fresh teammate pairs — preferring a court that also avoids repeat opponents,
+// and falling back to a fresh-partner-only court when no opponent-fresh court
+// exists. Locked pairs must be complete within the candidate quartet.
 //
 // availablePlayers should already be filtered to court-eligible sit-outs
 // (checkedIn, not on another court, not on medal cooldown). Players from the
@@ -110,17 +232,18 @@ export function shouldYieldThroneToQueue({
   const winnerGames = Math.min(...winnerGamesValues)
   const lastMatchSet = new Set(lastMatchPlayerIds)
 
-  const groupCounts = new Map()
+  const eligibleByGroup = new Map()
   availablePlayers.forEach((player) => {
     if (!player.checkedIn) return
     if (lastMatchSet.has(player.id)) return
     if ((Number(player.gamesPlayed) || 0) >= winnerGames) return
     const group = skillGroupOf(player.skillLevel)
-    groupCounts.set(group, (groupCounts.get(group) || 0) + 1)
+    if (!eligibleByGroup.has(group)) eligibleByGroup.set(group, [])
+    eligibleByGroup.get(group).push(player)
   })
 
-  for (const count of groupCounts.values()) {
-    if (count >= PLAYERS_PER_COURT) return true
+  for (const eligibleInGroup of eligibleByGroup.values()) {
+    if (groupHasYieldableQuorum(eligibleInGroup, getPlayer)) return true
   }
   return false
 }

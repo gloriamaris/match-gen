@@ -242,15 +242,65 @@ Players who appeared in the most recent `courtSlots` match-history entries are o
 
 For per-court refresh, cooldown uses the **session** court count (`cooldownCourts`), not the single court being generated.
 
-## Global fairness on per-court refresh
+## Shared Up Next queue on per-court refresh
 
-When only one court is refreshed after a score:
+The Courts View **Up Next** preview and the per-court refresh both run through one
+helper, `buildUpNextQueue`, so the preview always reflects what the next
+**Generate** click will place.
 
-1. Run fairness on **all** checked-in players using the session court count.
-2. Exclude players already assigned to **other** courts via `excludePlayerIds`.
-3. Generate a match for the empty court from the remaining eligible pool.
+`buildUpNextQueue(players, { courts, matchHistory, excludePlayerIds, gapExcludeIds })`:
 
-This matches the **Up Next** display in Courts View, which already ranks the full eligible roster. Players on other courts still participate in fairness ranking even though they are not reassigned.
+1. Build the eligible pool: checked-in players, minus those already on **other**
+   courts (`excludePlayerIds`), minus games-gap / medal exclusions
+   (`gapExcludeIds`).
+2. Rank that pool with `selectFairnessPool` using the session court count.
+3. Take a pair-aware top four (`takePairAwareCourtFill`) as `preferred` — a
+   mutual locked pair is never split across the four-player boundary.
+4. Return `{ queue, preferred }`, where `queue` leads with `preferred` and is
+   followed by the rest of the pool in fairness order.
+
+The empty-court refresh feeds `preferred` into `generateMatches(..., { courts: 1 })`
+to build the matchup; if that cannot form a valid match it falls back to the
+full `generateMatches` pass. Up Next renders `queue` as an ordered list and
+highlights the `preferred` four.
+
+When building the fallback court, on-court players are removed from the pool
+(marked not checked in) rather than passed as `excludePlayerIds`. Passing them as
+excludes let the fairness selection rank them first (they often have the fewest
+games) and then drop them, starving the pool so no valid skill-grouped court
+could form — which previously cascaded into the cross-skill `fallback-priority`
+path and surfaced non-adjacent matchups (e.g. Advanced + Beginner) in Up Next.
+Filtering the pool up front keeps the on-deck four within one skill group, the
+same as a normal Generate.
+
+When every court is occupied, the preview runs the same refresh against a virtual
+empty court so all on-court players are excluded and the on-deck four are the
+real (adjacent-skill) matchup that will fill the next court to open.
+
+Because both paths share the helper and the same exclusions (including
+games-gap via `resolveProgressivePlayQueueExclusions`), players already on
+other courts are simply removed up front.
+
+Up Next reads the roster fresh from storage on every render and unlocks when
+you return to the Courts tab, so check-ins made on the Players tab are reflected
+immediately. Before the first match, `queueOrder` is preserved through fairness
+unit sorting so staggered check-ins appear in the order players arrived.
+
+### Frozen Up Next block
+
+So the highlighted players do not reshuffle every time a score is entered, the
+preview is held in a frozen block of `numberOfCourts × 4` player ids
+(`captureProgressivePlayFreeze`). The first four are the highlighted on-deck
+players, and they are always a real, generatable court: the block leads with the
+on-deck court returned by the refresh, so the highlighted four match what
+Generate places. The block stays put through score entry — only the queue below it
+re-sorts from the live preview. **Generate** uses the frozen four
+(`materializeFrozenCourt`), guaranteeing the court that appears matches the
+highlighted players. After a successful Generate, the consumed four drop off the
+front and the block refills from a fresh capture, preserving the order of the
+players that remained (`advanceProgressivePlayFreeze`). The block is re-captured
+only when it becomes invalid — a frozen player checks out or is moved onto a
+court, the court count changes, or the session ends.
 
 ---
 

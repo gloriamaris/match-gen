@@ -2,13 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { toJpeg, toPng } from 'html-to-image'
 import {
   generateMatches,
-  generateStrictSkillCourt,
   applyMatchResult,
   revertMatchResult,
   PLAYERS_PER_COURT,
-  selectFairnessPool,
-  shouldUseCheckInOrder,
 } from '../../match-engines/v2/ProgressivePlay.engine'
+import {
+  refreshProgressivePlayCourt,
+  advanceProgressivePlayFreeze,
+  captureProgressivePlayFreeze,
+  isProgressivePlayFreezeValid,
+  materializeFrozenCourt,
+} from '../../match-engines/v2/progressivePlayCourtRefresh'
 import {
   applyMatchResult as trApplyMatchResult,
   revertMatchResult as trRevertMatchResult,
@@ -142,7 +146,11 @@ export default function AppV2() {
   const [players, setPlayers] = useState(() => loadV2Players())
   const [courtMatchups, setCourtMatchups] = useState(() => loadV2CourtMatchups())
   const [matchHistory, setMatchHistory] = useState(() => loadV2MatchHistory())
-  const [isUpNextLocked, setIsUpNextLocked] = useState(false)
+  // Frozen Up Next block for Progressive Play. Keeps the highlighted on-deck
+  // four (and the wider queue block) stable across score entry so Up Next
+  // matches what Generate produces. Re-captured only when it becomes invalid
+  // (player checks out / lands on a court, court count changes) or consumed.
+  const [progressivePlayFreeze, setProgressivePlayFreeze] = useState(null)
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
     courtIndex: null,
@@ -198,6 +206,41 @@ export default function AppV2() {
       setPlayers(loadV2Players())
     }
   }, [activeView])
+
+  // Keep the Progressive Play Up Next freeze captured and valid. Re-capture
+  // only when it is missing or invalidated (court count change, a frozen player
+  // checks out or lands on a court). Score entry never invalidates the block,
+  // so the highlighted on-deck players stay put until Generate consumes them.
+  useEffect(() => {
+    if (gameType !== V2_GAME_TYPES.PROGRESSIVE_PLAY) {
+      setProgressivePlayFreeze((prev) => (prev === null ? prev : null))
+      return
+    }
+    const roster = loadV2Players()
+    const valid =
+      progressivePlayFreeze &&
+      progressivePlayFreeze.numberOfCourts === numberOfCourts &&
+      isProgressivePlayFreezeValid(progressivePlayFreeze, roster, courtMatchups)
+    if (valid) return
+    const next = captureProgressivePlayFreeze(roster, {
+      courtMatchups: courtMatchups ?? [],
+      numberOfCourts,
+      matchHistory,
+      allowAdjacentSkillMixing,
+    })
+    setProgressivePlayFreeze((prev) => {
+      if (prev === null && next === null) return prev
+      return next
+    })
+  }, [
+    gameType,
+    numberOfCourts,
+    courtMatchups,
+    players,
+    matchHistory,
+    allowAdjacentSkillMixing,
+    progressivePlayFreeze,
+  ])
 
   useEffect(() => {
     return () => {
@@ -308,7 +351,7 @@ export default function AppV2() {
       setPlayers([])
       setCourtMatchups(null)
       setMatchHistory([])
-      setIsUpNextLocked(false)
+      setProgressivePlayFreeze(null)
       setActiveView('setup')
       setIsEndingSession(false)
       endTimeoutRef.current = null
@@ -357,8 +400,6 @@ export default function AppV2() {
       showRoundRobinCompleteModal()
       return
     }
-
-    setIsUpNextLocked(false)
 
     try {
       const currentPlayers = loadV2Players()
@@ -493,72 +534,39 @@ export default function AppV2() {
       }
 
       let preferredPlayers = []
-      let useCheckInOrderForRefresh = false
 
       if (!generatedCourt && !isRoundRobin) {
         if (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY) {
-          const onCourtIds = new Set()
-          ;(courtMatchups ?? []).forEach((matchup) => {
-            if (!matchup) return
-            matchup.teamA?.forEach((player) => onCourtIds.add(player.id))
-            matchup.teamB?.forEach((player) => onCourtIds.add(player.id))
-          })
-          const eligibleForCourt = currentPlayers.filter(
-            (player) => player.checkedIn && !onCourtIds.has(player.id)
-          )
-          useCheckInOrderForRefresh = shouldUseCheckInOrder(
-            eligibleForCourt,
-            matchHistory
-          )
-          const { selected: fairnessPool } =
-            eligibleForCourt.length >= PLAYERS_PER_COURT
-              ? selectFairnessPool(
-                  eligibleForCourt,
-                  numberOfCourts,
-                  matchHistory,
-                  {
-                    useCheckInOrder: useCheckInOrderForRefresh,
-                    cooldownSlots: numberOfCourts,
-                  }
-                )
-              : { selected: [] }
-          // Fill the preferred court pair-aware: a locked pair is added as a
-          // unit so it is never split across the 4-player slice boundary.
-          preferredPlayers = []
-          const preferredIds = new Set()
-          for (const player of fairnessPool) {
-            if (preferredPlayers.length >= PLAYERS_PER_COURT) break
-            if (preferredIds.has(player.id)) continue
-            const teammate =
-              player.teammateId && !preferredIds.has(player.teammateId)
-                ? fairnessPool.find(
-                    (candidate) =>
-                      candidate.id === player.teammateId &&
-                      candidate.teammateId === player.id
-                  )
-                : null
-            if (teammate) {
-              if (preferredPlayers.length + 2 > PLAYERS_PER_COURT) continue
-              preferredPlayers.push(player, teammate)
-              preferredIds.add(player.id)
-              preferredIds.add(teammate.id)
-            } else {
-              preferredPlayers.push(player)
-              preferredIds.add(player.id)
-            }
+          const freezeUsable =
+            progressivePlayFreeze &&
+            progressivePlayFreeze.numberOfCourts === numberOfCourts &&
+            isProgressivePlayFreezeValid(
+              progressivePlayFreeze,
+              currentPlayers,
+              courtMatchups ?? []
+            )
+
+          if (freezeUsable) {
+            generatedCourt = materializeFrozenCourt(
+              progressivePlayFreeze,
+              currentPlayers,
+              { matchHistory, allowAdjacentSkillMixing }
+            )
           }
 
-          if (preferredPlayers.length === PLAYERS_PER_COURT) {
-            const preferredResult = generateMatches(preferredPlayers, {
-              courts: 1,
+          if (!generatedCourt) {
+            const refresh = refreshProgressivePlayCourt(currentPlayers, {
+              courtIndex,
+              courtMatchups: courtMatchups ?? [],
+              numberOfCourts,
               matchHistory,
               allowAdjacentSkillMixing,
+              medalExcludeIds,
             })
-            generatedCourt = preferredResult.courts[0] ?? null
+            generatedCourt = refresh.court
+            preferredPlayers = refresh.preferred
           }
-        }
-
-        if (!generatedCourt) {
+        } else {
           const result = generateMatches(effectivePlayers, {
             courts: 1,
             cooldownCourts: numberOfCourts,
@@ -573,17 +581,7 @@ export default function AppV2() {
       const strictMixing =
         gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY && !allowAdjacentSkillMixing
 
-      if (!generatedCourt && strictMixing) {
-        generatedCourt = generateStrictSkillCourt(effectivePlayers, {
-          matchHistory,
-          courts: numberOfCourts,
-          excludePlayerIds: otherCourtPlayerIds,
-          preferredPlayerIds: preferredPlayers.map((p) => p.id),
-          useCheckInOrder: useCheckInOrderForRefresh,
-        })
-      }
-
-      if (!generatedCourt && !strictMixing && !isRoundRobin) {
+      if (!generatedCourt && !strictMixing && !isRoundRobin && gameType !== V2_GAME_TYPES.PROGRESSIVE_PLAY) {
         generatedCourt = generateFallbackCourtByPriority(effectivePlayers, {
           courtIndex,
           courtMatchups: courtMatchups ?? [],
@@ -630,6 +628,25 @@ export default function AppV2() {
 
       setCourtMatchups(nextMatchups)
       saveV2CourtMatchups(nextMatchups)
+
+      if (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY && progressivePlayFreeze) {
+        const generatedIds = [
+          ...generatedCourt.teamA,
+          ...generatedCourt.teamB,
+        ].map((player) => player.id)
+        const nextFreeze = advanceProgressivePlayFreeze(
+          progressivePlayFreeze,
+          generatedIds,
+          currentPlayers,
+          {
+            courtMatchups: nextMatchups,
+            numberOfCourts,
+            matchHistory,
+            allowAdjacentSkillMixing,
+          }
+        )
+        setProgressivePlayFreeze(nextFreeze)
+      }
     } catch (error) {
       setErrorModal({
         isOpen: true,
@@ -805,7 +822,6 @@ export default function AppV2() {
 
     setCourtMatchups(nextMatchups)
     saveV2CourtMatchups(nextMatchups)
-    setIsUpNextLocked(true)
 
     if (isRoundRobinComplete(updatedPlayers)) {
       showRoundRobinCompleteModal()
@@ -1314,7 +1330,7 @@ export default function AppV2() {
               checkedInCount={checkedInCount}
               winStreak={winStreak}
               allowAdjacentSkillMixing={allowAdjacentSkillMixing}
-              lockUpNext={isUpNextLocked}
+              progressivePlayFreeze={progressivePlayFreeze}
               onGenerateCourt={handleGenerateCourt}
               onEditCourt={handleOpenEditCourt}
               onOpenScore={handleOpenScore}

@@ -96,7 +96,7 @@ Before throne rotation runs on refresh, AppV2 evaluates two guards (in `src/matc
 
 1. **`shouldSkipThroneForGamesGap`** — skips throne when any **zero-game** player is waiting in the pool, or (when the session gap is being enforced) when the staying winner is more than `V2_MAX_GAMES_GAP` games ahead of the session minimum.
 
-2. **`shouldYieldThroneToQueue`** — yields the court back to the queue when at least **4 court-eligible sit-outs in a single skill group** (Beginner+Novice or Intermediate+Advanced) have **fewer games** than the staying winner. The 4-in-one-group requirement guarantees those players can form a legal court on their own. Players from the match just scored are excluded from the count.
+2. **`shouldYieldThroneToQueue`** — yields the court back to the queue when **4 court-eligible sit-outs in a single skill group** (Beginner+Novice or Intermediate+Advanced) with **fewer games** than the staying winner can form a court with **fresh teammate pairs**. The guard searches quartets within each group: it yields immediately when a quartet can also be split into teams with **no repeat opponents**, and otherwise falls back to yielding when a **fresh-partner-only** court exists (matching Progressive Play's priority of partner diversity over opponent diversity). If every candidate quartet would require a repeat teammate pairing, the guard does **not** yield. Locked pairs must be **complete** within a quartet — a sit-out whose locked partner is on another court cannot count toward it. Players from the match just scored are excluded.
 
    `winnerGames` is the **minimum** `gamesPlayed` among staying winners. A candidate counts only when `gamesPlayed < winnerGames` and they are checked in, not on another court, and not on medal cooldown.
 

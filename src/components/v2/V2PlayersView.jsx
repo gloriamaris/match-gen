@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import V2AddPlayerModal from './V2AddPlayerModal'
 import V2TeamBadge from './V2TeamBadge'
 import V2TeamWithModal from './V2TeamWithModal'
@@ -11,6 +12,78 @@ import {
 
 const noop = () => {}
 const SKILL_LEVELS = ['Beginner', 'Novice', 'Intermediate', 'Advanced']
+const DEFAULT_SORT = { key: 'name', dir: 'asc' }
+
+const skillLevelRank = (level) => {
+  const index = SKILL_LEVELS.indexOf(level)
+  return index === -1 ? SKILL_LEVELS.length : index
+}
+
+const comparePlayers = (a, b, sortKey, sortDir) => {
+  const dir = sortDir === 'asc' ? 1 : -1
+
+  const compareByKey = (key) => {
+    switch (key) {
+      case 'name':
+        return (a.name || '').localeCompare(b.name || '')
+      case 'gender':
+        return (a.gender || '').localeCompare(b.gender || '')
+      case 'skillLevel':
+        return skillLevelRank(a.skillLevel) - skillLevelRank(b.skillLevel)
+      case 'status':
+        return Number(a.checkedIn) - Number(b.checkedIn)
+      default:
+        return 0
+    }
+  }
+
+  const primary = compareByKey(sortKey) * dir
+  if (primary !== 0) return primary
+
+  if (sortKey !== 'name') {
+    return (a.name || '').localeCompare(b.name || '')
+  }
+  return 0
+}
+
+const SortableHeader = ({
+  label,
+  sortKey,
+  activeSortKey,
+  sortDir,
+  onSort,
+}) => {
+  const isActive = activeSortKey === sortKey
+
+  return (
+    <th className="px-4 py-3">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex w-full items-center justify-start gap-1 transition hover:text-slate-700 ${
+          isActive ? 'text-slate-700' : ''
+        }`}
+        aria-sort={
+          isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
+        }
+      >
+        <span>{label}</span>
+        {isActive ? (
+          sortDir === 'asc' ? (
+            <ArrowUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <ArrowDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          )
+        ) : (
+          <ArrowUpDown
+            className="h-3.5 w-3.5 shrink-0 text-slate-400"
+            aria-hidden="true"
+          />
+        )}
+      </button>
+    </th>
+  )
+}
 const EMPTY_PLAYER_FORM_VALUES = {
   name: '',
   gender: 'Female',
@@ -97,6 +170,22 @@ export default function V2PlayersView({ onCheckOut: externalCheckOut }) {
     saveV2Players(loaded)
     return loaded
   })
+  const [sortKey, setSortKey] = useState(DEFAULT_SORT.key)
+  const [sortDir, setSortDir] = useState(DEFAULT_SORT.dir)
+
+  const sortedPlayers = useMemo(
+    () => [...players].sort((a, b) => comparePlayers(a, b, sortKey, sortDir)),
+    [players, sortKey, sortDir]
+  )
+
+  const handleSort = (key) => {
+    if (key === sortKey) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setSortKey(key)
+    setSortDir('asc')
+  }
 
   const handleSavePlayer = (formValues) => {
     const normalizedValues = {
@@ -280,7 +369,7 @@ export default function V2PlayersView({ onCheckOut: externalCheckOut }) {
   const exportPlayersCsv = () => {
     const rows = [
       ['Player Name', 'Gender', 'Skill Level', 'Status'],
-      ...players.map((player) => [
+      ...sortedPlayers.map((player) => [
         player.name,
         player.gender || '',
         player.skillLevel || '',
@@ -491,10 +580,34 @@ export default function V2PlayersView({ onCheckOut: externalCheckOut }) {
           <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">#</th>
-              <th className="px-4 py-3">Player Name</th>
-              <th className="px-4 py-3">Gender</th>
-              <th className="px-4 py-3">Skill Level</th>
-              <th className="px-4 py-3">Status</th>
+              <SortableHeader
+                label="Player Name"
+                sortKey="name"
+                activeSortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                label="Gender"
+                sortKey="gender"
+                activeSortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                label="Skill Level"
+                sortKey="skillLevel"
+                activeSortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
+              <SortableHeader
+                label="Status"
+                sortKey="status"
+                activeSortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
               <th className="px-4 py-3">Action</th>
             </tr>
           </thead>
@@ -509,7 +622,7 @@ export default function V2PlayersView({ onCheckOut: externalCheckOut }) {
                 </td>
               </tr>
             ) : (
-              players.map((player, index) => (
+              sortedPlayers.map((player, index) => (
                 <tr key={player.id}>
                   <td className="px-4 py-3 text-slate-500">{index + 1}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">
