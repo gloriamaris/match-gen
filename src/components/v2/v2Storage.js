@@ -18,6 +18,7 @@ export const V2_GAME_TYPES = {
   ROUND_ROBIN: 'round-robin',
   PROGRESSIVE_PLAY: 'progressive-play',
   THRONE_RUN: 'throne-run',
+  LADDER_RUN: 'ladder-run',
 }
 
 export const DEFAULT_V2_GAME_TYPE = V2_GAME_TYPES.PROGRESSIVE_PLAY
@@ -90,13 +91,11 @@ export function loadV2SessionStarted() {
 export function loadV2GameType() {
   const stored =
     window.localStorage.getItem(V2_STORAGE_KEYS.gameType) || DEFAULT_V2_GAME_TYPE
-  if (stored === 'ladder-run') {
-    return V2_GAME_TYPES.PROGRESSIVE_PLAY
-  }
   if (
     stored === V2_GAME_TYPES.ROUND_ROBIN ||
     stored === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
-    stored === V2_GAME_TYPES.THRONE_RUN
+    stored === V2_GAME_TYPES.THRONE_RUN ||
+    stored === V2_GAME_TYPES.LADDER_RUN
   ) {
     return stored
   }

@@ -26,6 +26,12 @@ const GAME_TYPE_OPTIONS = [
     description:
       'Winners may stay on court with new partners, or yield when enough lower-game players are waiting.',
   },
+  {
+    id: V2_GAME_TYPES.LADDER_RUN,
+    label: 'Ladder Run',
+    description:
+      'The order of who you play against is not predetermined but is created depending on the results of other matches.',
+  },
 ]
 
 export default function V2GameTypeSection({

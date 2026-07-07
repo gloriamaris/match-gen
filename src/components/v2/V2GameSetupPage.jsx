@@ -62,7 +62,8 @@ export default function V2GameSetupPage({
           onSelectNumberOfCourts={onSelectNumberOfCourts}
           disabled={selectionDisabled}
         />
-        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+        gameType === V2_GAME_TYPES.LADDER_RUN ? (
           <V2AdjacentSkillMixingSection
             allowAdjacentSkillMixing={allowAdjacentSkillMixing}
             onToggleAdjacentSkillMixing={onToggleAdjacentSkillMixing}

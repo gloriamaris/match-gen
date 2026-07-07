@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from 'react'
 import { Check, ChevronDown, ChevronUp, Pencil, RefreshCw } from 'lucide-react'
 import {
+  buildLadderRunUpNextPreview,
+  getLadderRunCooldownIds,
+  getPlayerLastResult,
+  isLadderRunFreezeValid,
+  ladderRunOnDeckSize,
+} from '../../match-engines/v2/LadderRun.engine'
+import {
   getCooldownIds,
 } from '../../match-engines/v2/ProgressivePlay.engine'
 import {
@@ -55,6 +62,17 @@ const sortPlayersByGamesAndQueue = (a, b) => {
     (Number(a.gamesPlayed) || 0) - (Number(b.gamesPlayed) || 0)
   if (gamesDiff !== 0) return gamesDiff
   return (Number(a.queueOrder) || 0) - (Number(b.queueOrder) || 0)
+}
+
+const sortPlayersByQueueOrderOldestFirst = (a, b) => {
+  const aQueueOrder = Number.isFinite(Number(a.queueOrder))
+    ? Number(a.queueOrder)
+    : Number.POSITIVE_INFINITY
+  const bQueueOrder = Number.isFinite(Number(b.queueOrder))
+    ? Number(b.queueOrder)
+    : Number.POSITIVE_INFINITY
+  if (aQueueOrder !== bQueueOrder) return aQueueOrder - bQueueOrder
+  return String(a.name ?? '').localeCompare(String(b.name ?? ''))
 }
 
 const groupPlayersBySkillLevel = (playerList, { preserveOrder = false } = {}) =>
@@ -134,6 +152,7 @@ export default function V2CourtsView({
   winStreak = 0,
   allowAdjacentSkillMixing = true,
   progressivePlayFreeze = null,
+  ladderRunFreeze = null,
   onGenerateCourt = noop,
   onEditCourt = noop,
   onOpenScore = noop,
@@ -154,6 +173,7 @@ export default function V2CourtsView({
 
   const checkedInPlayers = players.filter((p) => p.checkedIn)
   const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+  const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
   const roundRobinProgress = useMemo(
     () =>
       isRoundRobin
@@ -161,7 +181,9 @@ export default function V2CourtsView({
         : null,
     [isRoundRobin, players, gameMode]
   )
-  const cooldownIds = getCooldownIds(matchHistory, numberOfCourts)
+  const cooldownIds = isLadderRun
+    ? getLadderRunCooldownIds(matchHistory)
+    : getCooldownIds(matchHistory, numberOfCourts)
   const playingPlayers = checkedInPlayers.filter((p) => onCourtIds.has(p.id))
   const cooldownPlayers = checkedInPlayers.filter(
     (p) => !onCourtIds.has(p.id) && cooldownIds.has(p.id)
@@ -185,18 +207,55 @@ export default function V2CourtsView({
       })
     : null
 
+  const ladderRunPreview = isLadderRun
+    ? buildLadderRunUpNextPreview(rosterPlayers, {
+        numberOfCourts,
+        gameMode,
+        allowAdjacentSkillMixing,
+        courtMatchups,
+        matchHistory,
+      })
+    : null
+
   // When a valid freeze exists, the frozen block leads the queue and only the
   // tail below it re-sorts. Otherwise fall back to the live preview ordering.
-  const freezeActive =
+  const progressiveFreezeActive =
     isProgressivePlay &&
     isProgressivePlayFreezeValid(progressivePlayFreeze, rosterPlayers, courtMatchups)
-  const upNextPlayers = freezeActive
-    ? mergeFrozenUpNextDisplay(progressivePlayFreeze, upNextPreview, rosterPlayers)
-    : (upNextPreview?.queue ?? [])
+  const ladderRunFreezeActive =
+    isLadderRun &&
+    isLadderRunFreezeValid(ladderRunFreeze, rosterPlayers, courtMatchups, {
+      numberOfCourts,
+      gameMode,
+    })
+  const ladderRunMaxSlots =
+    Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
+  const progressiveMaxSlots = Math.max(numberOfCourts, 1) * 4
+  const upNextPlayers = isLadderRun
+    ? ladderRunFreezeActive
+      ? mergeFrozenUpNextDisplay(
+          ladderRunFreeze,
+          ladderRunPreview,
+          rosterPlayers,
+          ladderRunMaxSlots
+        )
+      : (ladderRunPreview?.queue ?? [])
+    : progressiveFreezeActive
+      ? mergeFrozenUpNextDisplay(
+          progressivePlayFreeze,
+          upNextPreview,
+          rosterPlayers,
+          progressiveMaxSlots
+        )
+      : (upNextPreview?.queue ?? [])
   const upNextOnDeckIds = new Set(
-    freezeActive
-      ? progressivePlayFreeze.queueIds.slice(0, 4)
-      : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)
+    isLadderRun
+      ? ladderRunFreezeActive
+        ? ladderRunFreeze.queueIds.slice(0, ladderRunOnDeckSize(gameMode))
+        : (ladderRunPreview?.onDeckPlayers ?? []).map((player) => player.id)
+      : progressiveFreezeActive
+        ? progressivePlayFreeze.queueIds.slice(0, 4)
+        : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)
   )
 
   const playersWithMedals = checkedInPlayers
@@ -208,27 +267,42 @@ export default function V2CourtsView({
     .sort((a, b) => (Number(b.currentWinStreak) || 0) - (Number(a.currentWinStreak) || 0) || a.name.localeCompare(b.name))
 
   const winnersCount = new Set([...playersWithMedals, ...playersOnWinStreak].map((p) => p.id)).size
+  const winnerPlayers = isLadderRun
+    ? checkedInPlayers
+        .filter((player) => getPlayerLastResult(player, matchHistory) === 'win')
+        .sort(sortPlayersByQueueOrderOldestFirst)
+    : []
+  const loserPlayers = isLadderRun
+    ? checkedInPlayers
+        .filter((player) => getPlayerLastResult(player, matchHistory) === 'loss')
+        .sort(sortPlayersByQueueOrderOldestFirst)
+    : []
+  const winnerGroups = groupPlayersBySkillLevel(winnerPlayers, { preserveOrder: true })
+  const loserGroups = groupPlayersBySkillLevel(loserPlayers, { preserveOrder: true })
   const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
-  const showUpNextSection = upNextPlayers.length > 0
+  const showWinnersLosersSection =
+    isLadderRun && (winnerPlayers.length > 0 || loserPlayers.length > 0)
+  const showUpNextSection = isLadderRun || upNextPlayers.length > 0
 
   const playerNameById = new Map(players.map((p) => [p.id, p.name]))
   const latestMatch = matchHistory.length > 0 ? matchHistory[matchHistory.length - 1] : null
-  const latestSkillMovements = latestMatch?.skillChanges
-    ? Object.entries(latestMatch.skillChanges)
-        .map(([playerId, change]) => ({
-          id: playerId,
-          name: playerNameById.get(playerId) ?? 'Unknown player',
-          fromLevel: change.from,
-          toLevel: change.to,
-          direction: change.direction,
-        }))
-        .sort((a, b) => {
-          if (a.direction !== b.direction) {
-            return a.direction === 'up' ? -1 : 1
-          }
-          return a.name.localeCompare(b.name)
-        })
-    : []
+  const latestSkillMovements =
+    isLadderRun || !latestMatch?.skillChanges
+      ? []
+      : Object.entries(latestMatch.skillChanges)
+          .map(([playerId, change]) => ({
+            id: playerId,
+            name: playerNameById.get(playerId) ?? 'Unknown player',
+            fromLevel: change.from,
+            toLevel: change.to,
+            direction: change.direction,
+          }))
+          .sort((a, b) => {
+            if (a.direction !== b.direction) {
+              return a.direction === 'up' ? -1 : 1
+            }
+            return a.name.localeCompare(b.name)
+          })
 
   const courts = Array.from({ length: numberOfCourts }, (_, index) => {
     const matchup = courtMatchups?.[index] ?? null
@@ -346,11 +420,20 @@ export default function V2CourtsView({
                   >
                     Up Next ({upNextPlayers.length})
                   </h2>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {freezeActive
-                      ? 'Highlighted players are locked in and fill the next court when you generate. The rest stay in order until then; players further down may shift as scores come in.'
-                      : 'Fairness-ordered queue — the highlighted players fill the next court when you generate, the rest follow in priority order'}
-                  </p>
+                  {isLadderRun ? (
+                    upNextPlayers.length > 0 ? (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Grouped by check-in order, recent win/loss status, and
+                        skill level for the next courts.
+                      </p>
+                    ) : null
+                  ) : (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {freezeActive
+                        ? 'Highlighted players are locked in and fill the next court when you generate. The rest stay in order until then; players further down may shift as scores come in.'
+                        : 'Fairness-ordered queue — the highlighted players fill the next court when you generate, the rest follow in priority order'}
+                    </p>
+                  )}
                 </div>
                 {isUpNextExpanded ? (
                   <ChevronUp
@@ -541,6 +624,62 @@ export default function V2CourtsView({
                   groupHeadingClassName="text-sky-500"
                   chipClassName="inline-flex items-center rounded-lg border border-sky-200 bg-white px-2 py-0.5 text-xs font-medium text-sky-700"
                   gamesClassName="ml-1 font-normal text-sky-500"
+                />
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {showWinnersLosersSection ? (
+        <section
+          aria-labelledby="winners-losers-heading"
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+        >
+          <div className="border-b border-slate-200 px-4 py-3 sm:px-5">
+            <h2
+              id="winners-losers-heading"
+              className="text-sm font-semibold text-slate-900"
+            >
+              Winners & Losers
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Grouped by skill level to help pair winners with winners and losers
+              with losers.
+            </p>
+          </div>
+          <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                Winners ({winnerPlayers.length})
+              </h3>
+              {winnerPlayers.length === 0 ? (
+                <p className="mt-2 text-sm text-emerald-500">
+                  No winners with recorded match results yet.
+                </p>
+              ) : (
+                <V2PlayerStatusGroups
+                  groups={winnerGroups}
+                  groupHeadingClassName="text-emerald-500"
+                  chipClassName="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700"
+                  gamesClassName="ml-1 font-normal text-emerald-500"
+                />
+              )}
+            </div>
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-rose-600">
+                Losers ({loserPlayers.length})
+              </h3>
+              {loserPlayers.length === 0 ? (
+                <p className="mt-2 text-sm text-rose-500">
+                  No losers with recorded match results yet.
+                </p>
+              ) : (
+                <V2PlayerStatusGroups
+                  groups={loserGroups}
+                  groupHeadingClassName="text-rose-500"
+                  chipClassName="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-0.5 text-xs font-medium text-rose-700"
+                  gamesClassName="ml-1 font-normal text-rose-500"
                 />
               )}
             </div>

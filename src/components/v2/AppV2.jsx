@@ -27,6 +27,15 @@ import {
   computeRoundRobinMatchupProgress,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
+  applyLadderRunMatchResult,
+  advanceLadderRunFreeze,
+  captureLadderRunFreeze,
+  generateLadderRunCourt,
+  isLadderRunFreezeValid,
+  materializeFrozenLadderRunCourt,
+  revertLadderRunMatchResult,
+} from '../../match-engines/v2/LadderRun.engine'
+import {
   applyGamesGapExclusions,
   buildGamesGapExclusions,
   countAvailableEligiblePlayers,
@@ -151,6 +160,9 @@ export default function AppV2() {
   // matches what Generate produces. Re-captured only when it becomes invalid
   // (player checks out / lands on a court, court count changes) or consumed.
   const [progressivePlayFreeze, setProgressivePlayFreeze] = useState(null)
+  // Frozen Up Next block for Ladder Run. Keeps the queue stable across score
+  // entry; new eligible players are appended at the tail only.
+  const [ladderRunFreeze, setLadderRunFreeze] = useState(null)
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
     courtIndex: null,
@@ -240,6 +252,43 @@ export default function AppV2() {
     matchHistory,
     allowAdjacentSkillMixing,
     progressivePlayFreeze,
+  ])
+
+  useEffect(() => {
+    if (gameType !== V2_GAME_TYPES.LADDER_RUN) {
+      setLadderRunFreeze((prev) => (prev === null ? prev : null))
+      return
+    }
+    const roster = loadV2Players()
+    const valid =
+      ladderRunFreeze &&
+      ladderRunFreeze.numberOfCourts === numberOfCourts &&
+      ladderRunFreeze.gameMode === gameMode &&
+      isLadderRunFreezeValid(ladderRunFreeze, roster, courtMatchups, {
+        numberOfCourts,
+        gameMode,
+      })
+    if (valid) return
+    const next = captureLadderRunFreeze(roster, {
+      courtMatchups: courtMatchups ?? [],
+      numberOfCourts,
+      gameMode,
+      matchHistory,
+      allowAdjacentSkillMixing,
+    })
+    setLadderRunFreeze((prev) => {
+      if (prev === null && next === null) return prev
+      return next
+    })
+  }, [
+    gameType,
+    gameMode,
+    numberOfCourts,
+    courtMatchups,
+    players,
+    matchHistory,
+    allowAdjacentSkillMixing,
+    ladderRunFreeze,
   ])
 
   useEffect(() => {
@@ -352,6 +401,7 @@ export default function AppV2() {
       setCourtMatchups(null)
       setMatchHistory([])
       setProgressivePlayFreeze(null)
+      setLadderRunFreeze(null)
       setActiveView('setup')
       setIsEndingSession(false)
       endTimeoutRef.current = null
@@ -566,6 +616,38 @@ export default function AppV2() {
             generatedCourt = refresh.court
             preferredPlayers = refresh.preferred
           }
+        } else if (gameType === V2_GAME_TYPES.LADDER_RUN) {
+          const freezeUsable =
+            ladderRunFreeze &&
+            ladderRunFreeze.numberOfCourts === numberOfCourts &&
+            ladderRunFreeze.gameMode === gameMode &&
+            isLadderRunFreezeValid(ladderRunFreeze, currentPlayers, courtMatchups ?? [], {
+              numberOfCourts,
+              gameMode,
+            })
+
+          if (freezeUsable) {
+            generatedCourt = materializeFrozenLadderRunCourt(
+              ladderRunFreeze,
+              currentPlayers,
+              {
+                gameMode,
+                courtIndex,
+                allowAdjacentSkillMixing,
+              }
+            )
+          }
+
+          if (!generatedCourt) {
+            generatedCourt = generateLadderRunCourt(currentPlayers, {
+              numberOfCourts,
+              gameMode,
+              allowAdjacentSkillMixing,
+              courtMatchups: courtMatchups ?? [],
+              matchHistory,
+              courtIndex,
+            })
+          }
         } else {
           const result = generateMatches(effectivePlayers, {
             courts: 1,
@@ -581,7 +663,13 @@ export default function AppV2() {
       const strictMixing =
         gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY && !allowAdjacentSkillMixing
 
-      if (!generatedCourt && !strictMixing && !isRoundRobin && gameType !== V2_GAME_TYPES.PROGRESSIVE_PLAY) {
+      if (
+        !generatedCourt &&
+        !strictMixing &&
+        !isRoundRobin &&
+        gameType !== V2_GAME_TYPES.PROGRESSIVE_PLAY &&
+        gameType !== V2_GAME_TYPES.LADDER_RUN
+      ) {
         generatedCourt = generateFallbackCourtByPriority(effectivePlayers, {
           courtIndex,
           courtMatchups: courtMatchups ?? [],
@@ -609,6 +697,8 @@ export default function AppV2() {
           message:
             checkedInCount < minPlayers
               ? `Not enough checked-in players. At least ${minPlayers} are required.`
+              : gameType === V2_GAME_TYPES.LADDER_RUN
+                ? 'Not enough players in Up Next to fill this court.'
               : enforceGap && eligibleAfterGap < minPlayers
                 ? 'Games gap limit reached — not enough eligible players with fewer games. Score or refresh other courts so lower-game players can play first.'
                 : strictMixing
@@ -646,6 +736,26 @@ export default function AppV2() {
           }
         )
         setProgressivePlayFreeze(nextFreeze)
+      }
+
+      if (gameType === V2_GAME_TYPES.LADDER_RUN && ladderRunFreeze) {
+        const generatedIds = [
+          ...generatedCourt.teamA,
+          ...generatedCourt.teamB,
+        ].map((player) => player.id)
+        const nextFreeze = advanceLadderRunFreeze(
+          ladderRunFreeze,
+          generatedIds,
+          currentPlayers,
+          {
+            courtMatchups: nextMatchups,
+            numberOfCourts,
+            gameMode,
+            matchHistory,
+            allowAdjacentSkillMixing,
+          }
+        )
+        setLadderRunFreeze(nextFreeze)
       }
     } catch (error) {
       setErrorModal({
@@ -741,6 +851,7 @@ export default function AppV2() {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
     const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     let updatedPlayers
     let historyEntry
@@ -757,6 +868,15 @@ export default function AppV2() {
       ejectedWinnerIds = result.ejectedWinnerIds
     } else if (isRoundRobin) {
       const result = rrApplyMatchResult(players, {
+        courtIndex,
+        teamAIds,
+        teamBIds,
+        winningTeam,
+      })
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
+    } else if (isLadderRun) {
+      const result = applyLadderRunMatchResult(players, {
         courtIndex,
         teamAIds,
         teamBIds,
@@ -835,6 +955,7 @@ export default function AppV2() {
   const handleAddManualMatch = ({ court, teamAIds, teamBIds, scoreA, scoreB, enteredBy }) => {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     const { players: updatedPlayers, historyEntry } = isRoundRobin
       ? rrApplyMatchResult(players, {
@@ -843,11 +964,18 @@ export default function AppV2() {
           teamBIds,
           winningTeam,
         })
-      : applyMatchResult(
-          players,
-          { courtIndex: null, teamAIds, teamBIds, winningTeam },
-          { skillAdjustment }
-        )
+      : isLadderRun
+        ? applyLadderRunMatchResult(players, {
+            courtIndex: null,
+            teamAIds,
+            teamBIds,
+            winningTeam,
+          })
+        : applyMatchResult(
+            players,
+            { courtIndex: null, teamAIds, teamBIds, winningTeam },
+            { skillAdjustment }
+          )
 
     setPlayers(updatedPlayers)
     saveV2Players(updatedPlayers)
@@ -892,6 +1020,7 @@ export default function AppV2() {
     let currentPlayers = players
     const importedEntries = []
     const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     matches.forEach((match) => {
       const winningTeam = match.scoreA > match.scoreB ? 'A' : 'B'
@@ -902,16 +1031,23 @@ export default function AppV2() {
             teamBIds: match.teamBIds,
             winningTeam,
           })
-        : applyMatchResult(
-            currentPlayers,
-            {
+        : isLadderRun
+          ? applyLadderRunMatchResult(currentPlayers, {
               courtIndex: null,
               teamAIds: match.teamAIds,
               teamBIds: match.teamBIds,
               winningTeam,
-            },
-            { skillAdjustment }
-          )
+            })
+          : applyMatchResult(
+              currentPlayers,
+              {
+                courtIndex: null,
+                teamAIds: match.teamAIds,
+                teamBIds: match.teamBIds,
+                winningTeam,
+              },
+              { skillAdjustment }
+            )
 
       currentPlayers = updatedPlayers
       importedEntries.push({
@@ -963,6 +1099,7 @@ export default function AppV2() {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
     const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
     const useThroneRunEngine =
       isThroneRun &&
       (oldMatch.ejectedWinnerIds != null || oldMatch.courtIndex != null)
@@ -971,6 +1108,8 @@ export default function AppV2() {
       ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
       : isRoundRobin
         ? rrRevertMatchResult(players, oldMatch)
+        : isLadderRun
+          ? revertLadderRunMatchResult(players, oldMatch)
         : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     let historyEntry
@@ -992,6 +1131,15 @@ export default function AppV2() {
       ejectedWinnerIds = result.ejectedWinnerIds
     } else if (isRoundRobin) {
       const result = rrApplyMatchResult(updatedPlayers, {
+        courtIndex: oldMatch.courtIndex ?? null,
+        teamAIds,
+        teamBIds,
+        winningTeam,
+      })
+      updatedPlayers = result.players
+      historyEntry = result.historyEntry
+    } else if (isLadderRun) {
+      const result = applyLadderRunMatchResult(updatedPlayers, {
         courtIndex: oldMatch.courtIndex ?? null,
         teamAIds,
         teamBIds,
@@ -1331,6 +1479,7 @@ export default function AppV2() {
               winStreak={winStreak}
               allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               progressivePlayFreeze={progressivePlayFreeze}
+              ladderRunFreeze={ladderRunFreeze}
               onGenerateCourt={handleGenerateCourt}
               onEditCourt={handleOpenEditCourt}
               onOpenScore={handleOpenScore}

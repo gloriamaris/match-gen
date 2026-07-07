@@ -388,11 +388,15 @@ export function advanceProgressivePlayFreeze(
   return { queueIds: merged, onDeckCourt, numberOfCourts }
 }
 
-export function mergeFrozenUpNextDisplay(snapshot, livePreview, players) {
+export function mergeFrozenUpNextDisplay(snapshot, livePreview, players, maxSlots) {
   const frozenPlayers = materializeFreezePlayers(snapshot, players)
   const frozenIds = new Set(frozenPlayers.map((player) => player.id))
   const tail = (livePreview?.queue ?? []).filter(
     (player) => !frozenIds.has(player.id)
   )
-  return [...frozenPlayers, ...tail]
+  const merged = [...frozenPlayers, ...tail]
+  if (Number.isFinite(maxSlots) && maxSlots > 0) {
+    return merged.slice(0, maxSlots)
+  }
+  return merged
 }
