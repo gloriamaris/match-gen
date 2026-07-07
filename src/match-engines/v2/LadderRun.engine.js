@@ -364,85 +364,25 @@ function runGroupingPhases(eligible, state, options = {}) {
   }
 }
 
-// Final fallback fill: if Up Next is still below capacity, enqueue remaining
-// eligible players in check-in order (still respecting locked-in pair atomicity)
-// so the queue stays topped up for quick next-court generation.
-function runFallbackFill(eligible, state, options = {}) {
-  const { allPlayersById, allowAdjacentSkillMixing = false } = options
-  const { groupSize, maxSlots, assigned, queue } = state
-  if (queue.length >= maxSlots) return
-  const eligibleById = new Map(eligible.map((player) => [player.id, player]))
-
-  for (const player of eligible) {
-    if (queue.length >= maxSlots) break
-    if (assigned.has(player.id)) continue
-
-    const openGroupStart = Math.floor(queue.length / groupSize) * groupSize
-    const openGroup = queue.slice(openGroupStart)
-    const targetRank = openGroup.length > 0 ? collectiveSkillRank(openGroup) : null
-    const targetBucket =
-      openGroup.length > 0 ? skillBucketForPlayers(openGroup, allowAdjacentSkillMixing) : null
-
-    if (
-      openGroup.length > 0 &&
-      !playerMatchesGroupSkill(player, targetRank, targetBucket, allowAdjacentSkillMixing)
-    ) {
-      continue
-    }
-    addPlayerOrLockedUnit(
-      player,
-      queue,
-      assigned,
-      eligibleById,
-      allPlayersById,
-      maxSlots
-    )
-  }
-}
-
-// Append any sitting-out players not yet queued, in check-in order, without
-// skill constraints so the full Sitting Out section is represented first.
-function appendRemainingSittingOut(state, sittingOut, options = {}) {
-  const { allPlayersById } = options
-  const { maxSlots, assigned, queue } = state
-  const eligibleById = new Map(sittingOut.map((player) => [player.id, player]))
-
-  for (const player of sittingOut) {
-    if (queue.length >= maxSlots) break
-    if (assigned.has(player.id)) continue
-    addPlayerOrLockedUnit(
-      player,
-      queue,
-      assigned,
-      eligibleById,
-      allPlayersById,
-      maxSlots
-    )
-  }
-}
-
 // Top Up Next to capacity by appending cooldown players at the bottom. Grouping
-// runs on the cooldown pool only so rested players never get interleaved ahead
-// of remaining sitting-out entries.
+// re-runs against the combined sitting-out + cooldown pool so a complete group
+// can form when sitting-out alone is short.
 function appendCooldownTopUp(state, cooldown, sittingOut, options = {}) {
   const { allPlayersById, allowAdjacentSkillMixing = false, matchHistory = [] } =
     options
   const { groupSize, maxSlots, assigned, queue, groups } = state
   if (queue.length >= maxSlots || cooldown.length === 0) return
 
-  const crossPoolEligibleById = new Map(
-    mergePoolsByCheckInOrder(sittingOut, cooldown).map((player) => [player.id, player])
+  const combinedEligible = mergePoolsByCheckInOrder(sittingOut, cooldown)
+  const combinedEligibleById = new Map(
+    combinedEligible.map((player) => [player.id, player])
   )
 
   const cooldownState = createUpNextState(groupSize, maxSlots - queue.length)
   cooldownState.assigned = new Set(assigned)
-  runGroupingPhases(cooldown, cooldownState, {
+  runGroupingPhases(combinedEligible, cooldownState, {
     allowAdjacentSkillMixing,
     matchHistory,
-    allPlayersById,
-  })
-  runFallbackFill(cooldown, cooldownState, {
-    allowAdjacentSkillMixing,
     allPlayersById,
   })
 
@@ -453,88 +393,12 @@ function appendCooldownTopUp(state, cooldown, sittingOut, options = {}) {
       player,
       queue,
       assigned,
-      crossPoolEligibleById,
+      combinedEligibleById,
       allPlayersById,
       maxSlots
     )
   }
   groups.push(...cooldownState.groups)
-
-  for (const player of cooldown) {
-    if (queue.length >= maxSlots) break
-    if (assigned.has(player.id)) continue
-    addPlayerOrLockedUnit(
-      player,
-      queue,
-      assigned,
-      crossPoolEligibleById,
-      allPlayersById,
-      maxSlots
-    )
-  }
-}
-
-// Build the visible Up Next list: skill-grouped sitting-out players first (with
-// any earlier check-ins that grouping skipped), inline locked cooldown partners,
-// then remaining cooldown players at the bottom — capped at courts * groupSize.
-function buildSittingOutThenCooldownDisplayQueue(
-  sittingOut,
-  cooldown,
-  maxSlots,
-  groupedSittingQueue,
-  allPlayersById
-) {
-  const groupedSitting = groupedSittingQueue.filter((player) =>
-    sittingOut.some((entry) => entry.id === player.id)
-  )
-  const groupedIds = new Set(groupedSitting.map((player) => player.id))
-  const groupedMinOrder =
-    groupedSitting.length > 0
-      ? Math.min(...groupedSitting.map((player) => checkInOrderOf(player)))
-      : Infinity
-
-  const missingEarly = sortByCheckInOrder(
-    sittingOut.filter(
-      (player) =>
-        !groupedIds.has(player.id) && checkInOrderOf(player) < groupedMinOrder
-    )
-  )
-  const missingLater = sortByCheckInOrder(
-    sittingOut.filter(
-      (player) =>
-        !groupedIds.has(player.id) && checkInOrderOf(player) >= groupedMinOrder
-    )
-  )
-
-  const sittingOrder = [...missingEarly, ...groupedSitting, ...missingLater]
-  const crossPoolById = new Map(
-    mergePoolsByCheckInOrder(sittingOut, cooldown).map((player) => [player.id, player])
-  )
-  const cooldownIds = new Set(cooldown.map((player) => player.id))
-  const queue = []
-  const used = new Set()
-
-  const pushPlayer = (player) => {
-    if (queue.length >= maxSlots || used.has(player.id)) return
-    queue.push(player)
-    used.add(player.id)
-  }
-
-  for (const player of sittingOrder) {
-    if (queue.length >= maxSlots) break
-    pushPlayer(player)
-    const teammate = getLockedTeammate(player, crossPoolById)
-    if (teammate && cooldownIds.has(teammate.id)) {
-      pushPlayer(teammate)
-    }
-  }
-
-  for (const player of sortByCheckInOrder(cooldown)) {
-    if (queue.length >= maxSlots) break
-    pushPlayer(player)
-  }
-
-  return queue.slice(0, maxSlots)
 }
 
 export function buildLadderRunUpNextPreview(players, options = {}) {
@@ -557,13 +421,6 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
 
   // Tier 1: skill-group from sitting-out players only.
   runGroupingPhases(sittingOut, state, phaseOptions)
-  runFallbackFill(sittingOut, state, phaseOptions)
-
-  // When the Sitting Out section alone cannot reach capacity, include every
-  // rested player before topping up from cooldown.
-  if (sittingOut.length < maxSlots) {
-    appendRemainingSittingOut(state, sittingOut, phaseOptions)
-  }
 
   // Tier 2: append cooldown players at the bottom when sitting out alone
   // cannot reach courts * groupSize.
@@ -572,17 +429,11 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
   }
 
   const finalEligible = mergePoolsByCheckInOrder(sittingOut, cooldown)
-  const queue = buildSittingOutThenCooldownDisplayQueue(
-    sittingOut,
-    cooldown,
-    maxSlots,
-    state.queue,
-    allPlayersById
-  )
+  const queue = state.queue.slice(0, maxSlots)
 
   return {
     queue,
-    onDeckPlayers: queue.slice(0, groupSize),
+    onDeckPlayers: state.groups[0] ?? [],
     groups: state.groups,
     eligible: finalEligible,
   }

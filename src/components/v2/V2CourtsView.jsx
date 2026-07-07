@@ -287,28 +287,31 @@ export default function V2CourtsView({
     isLadderRun
       ? (() => {
           const onDeckSize = ladderRunOnDeckSize(gameMode)
-          if (!ladderRunFreezeActive) {
-            return (ladderRunPreview?.onDeckPlayers ?? [])
-              .slice(0, onDeckSize)
-              .map((player) => player.id)
-          }
-          const frozenOnDeck = (ladderRunFreeze.queueIds ?? []).slice(0, onDeckSize)
-          const displayedOnDeck = upNextPlayers
+          const previewOnDeckIds = (ladderRunPreview?.onDeckPlayers ?? [])
             .slice(0, onDeckSize)
             .map((player) => player.id)
           const displayedIds = new Set(upNextPlayers.map((player) => player.id))
-          const visibleFrozen = frozenOnDeck.filter((id) => displayedIds.has(id))
-          if (visibleFrozen.length >= onDeckSize) return visibleFrozen
-          const merged = [...visibleFrozen]
-          const seen = new Set(merged)
-          for (const id of displayedOnDeck) {
-            if (merged.length >= onDeckSize) break
-            if (!seen.has(id)) {
-              merged.push(id)
-              seen.add(id)
-            }
+          if (!ladderRunFreezeActive) {
+            return previewOnDeckIds
           }
-          return merged
+          const frozenCourtIds = ladderRunFreeze?.onDeckCourt
+            ? [
+                ...(ladderRunFreeze.onDeckCourt.teamAIds ?? []),
+                ...(ladderRunFreeze.onDeckCourt.teamBIds ?? []),
+              ]
+            : []
+          const visibleFrozenCourtIds = frozenCourtIds.filter((id) => displayedIds.has(id))
+          if (visibleFrozenCourtIds.length >= onDeckSize) {
+            return visibleFrozenCourtIds.slice(0, onDeckSize)
+          }
+
+          const frozenQueueIds = (ladderRunFreeze?.queueIds ?? []).slice(0, onDeckSize)
+          const visibleFrozenQueueIds = frozenQueueIds.filter((id) => displayedIds.has(id))
+          if (visibleFrozenQueueIds.length >= onDeckSize) {
+            return visibleFrozenQueueIds
+          }
+
+          return previewOnDeckIds.filter((id) => displayedIds.has(id)).slice(0, onDeckSize)
         })()
       : isLeague
         ? leagueFreezeActive

@@ -17,20 +17,14 @@ const makePlayer = (id, overrides = {}) => ({
 
 describe('Ladder Run Up Next on-deck highlight count', () => {
   it('highlights four on-deck players when two courts have enough waiting players', () => {
-    const players = [
-      makePlayer('p1', { skillLevel: 'Intermediate', queueOrder: 1, gamesPlayed: 2 }),
-      makePlayer('p2', { skillLevel: 'Intermediate', queueOrder: 2, gamesPlayed: 2 }),
-      makePlayer('p3', { skillLevel: 'Advanced', queueOrder: 3, gamesPlayed: 1 }),
-      makePlayer('p4', { skillLevel: 'Novice', queueOrder: 4, gamesPlayed: 2 }),
-      makePlayer('p5', { skillLevel: 'Beginner', queueOrder: 5, gamesPlayed: 2 }),
-      makePlayer('p6', { skillLevel: 'Beginner', queueOrder: 6, gamesPlayed: 3 }),
-      makePlayer('p7', { skillLevel: 'Beginner', queueOrder: 7, gamesPlayed: 2 }),
-      makePlayer('p8', { skillLevel: 'Novice', queueOrder: 8, gamesPlayed: 2 }),
-      makePlayer('p9', { skillLevel: 'Novice', queueOrder: 9, gamesPlayed: 2 }),
-      makePlayer('p10', { skillLevel: 'Novice', queueOrder: 10, gamesPlayed: 1 }),
-      makePlayer('p11', { skillLevel: 'Novice', queueOrder: 11, gamesPlayed: 1 }),
-      makePlayer('p12', { skillLevel: 'Novice', queueOrder: 12, gamesPlayed: 1 }),
-    ]
+    const players = Array.from({ length: 12 }, (_, index) =>
+      makePlayer(`p${index + 1}`, {
+        skillLevel: 'Novice',
+        queueOrder: index + 1,
+        gamesPlayed: 1,
+        lastResult: 'win',
+      })
+    )
     const courtMatchups = [
       null,
       {

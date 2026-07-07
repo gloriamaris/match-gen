@@ -249,7 +249,7 @@ describe('buildLadderRunUpNextPreview', () => {
     expect(queue.map((player) => player.id)).toEqual(['n1', 'n2', 'b1', 'b2'])
   })
 
-  it('fallback-fills only same-skill players when strict grouping cannot form a full group', () => {
+  it('does not show partial groups when strict grouping cannot form a full group', () => {
     const players = [
       makePlayer('n1', { skillLevel: 'Novice', queueOrder: 1 }),
       makePlayer('n2', { skillLevel: 'Novice', queueOrder: 2 }),
@@ -264,7 +264,7 @@ describe('buildLadderRunUpNextPreview', () => {
     })
 
     expect(groups).toEqual([])
-    expect(queue.map((player) => player.id)).toEqual(['n1', 'n2', 'b1', 'b2'])
+    expect(queue.map((player) => player.id)).toEqual([])
   })
 
   it('does not mix Novice with Advanced when adjacent skill mixing is on', () => {
@@ -303,6 +303,29 @@ describe('buildLadderRunUpNextPreview', () => {
     ])
   })
 
+  it('skips an unfillable high-bucket anchor and selects the next complete low-bucket court', () => {
+    const players = [
+      makePlayer('i1', { skillLevel: 'Intermediate', queueOrder: 1, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('a1', { skillLevel: 'Advanced', queueOrder: 2, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('i2', { skillLevel: 'Intermediate', queueOrder: 3, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('n1', { skillLevel: 'Novice', queueOrder: 4, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('n2', { skillLevel: 'Novice', queueOrder: 5, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('b1', { skillLevel: 'Beginner', queueOrder: 6, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('b2', { skillLevel: 'Beginner', queueOrder: 7, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('n3', { skillLevel: 'Novice', queueOrder: 8, gamesPlayed: 1, lastResult: 'win' }),
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      allowAdjacentSkillMixing: true,
+    })
+
+    const onDeckIds = preview.onDeckPlayers.map((player) => player.id)
+    expect(onDeckIds).toEqual(['n1', 'n2', 'n3', 'b1'])
+    expect(onDeckIds).not.toEqual(['i1', 'a1', 'i2', 'n1'])
+  })
+
   it('fills zero-game anchors from sitting-out players with the same skill level', () => {
     const players = [
       makePlayer('n1', { skillLevel: 'Novice', queueOrder: 1 }),
@@ -321,7 +344,7 @@ describe('buildLadderRunUpNextPreview', () => {
     expect(queue.map((player) => player.id)).toEqual(['n1', 'n2', 'n3', 'n4'])
   })
 
-  it('excludes checked-out and on-court players but still fallback-fills Up Next', () => {
+  it('excludes checked-out and on-court players and omits partial groups', () => {
     const players = [
       makePlayer('n1', { skillLevel: 'Novice', queueOrder: 1 }),
       makePlayer('n2', { skillLevel: 'Novice', queueOrder: 2, checkedIn: false }),
@@ -342,7 +365,7 @@ describe('buildLadderRunUpNextPreview', () => {
       courtMatchups,
     })
 
-    expect(queue.map((player) => player.id)).toEqual(['n1', 'n3', 'n4'])
+    expect(queue.map((player) => player.id)).toEqual([])
   })
 
   it('tops up Up Next from cooldown when sitting-out players cannot fill a court', () => {
@@ -720,7 +743,7 @@ describe('buildLadderRunUpNextPreview', () => {
     })
 
     expect(preview.queue).toHaveLength(4)
-    expect(preview.queue.map((player) => player.id)).toEqual(['s1', 's2', 'c1', 'c2'])
+    expect(preview.queue.map((player) => player.id)).toEqual(['s2', 'c1', 'c2', 'c3'])
   })
 })
 
