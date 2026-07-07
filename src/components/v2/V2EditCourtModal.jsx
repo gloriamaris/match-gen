@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { canPlayerGroupsOpponents } from '../../match-engines/v2/ProgressivePlay.engine'
-import { V2_GAME_TYPES } from './v2Storage'
+import { V2_GAME_TYPES, isV2RoundRobinGameType } from './v2Storage'
 
 export default function V2EditCourtModal({
   isOpen,
@@ -16,7 +16,7 @@ export default function V2EditCourtModal({
   onSubmit,
 }) {
   const playersPerTeam = gameMode === 'singles' ? 1 : 2
-  const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+  const isRoundRobin = isV2RoundRobinGameType(gameType)
   const emptyTeam = () => Array.from({ length: playersPerTeam }, () => '')
   const [teamAIds, setTeamAIds] = useState(emptyTeam)
   const [teamBIds, setTeamBIds] = useState(emptyTeam)

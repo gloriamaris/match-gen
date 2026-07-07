@@ -15,8 +15,13 @@ import {
   isProgressivePlayFreezeValid,
   mergeFrozenUpNextDisplay,
 } from '../../match-engines/v2/progressivePlayCourtRefresh'
-import { computeRoundRobinMatchupProgress } from '../../match-engines/v2/RoundRobin.engine'
-import { loadV2Players, V2_GAME_TYPES } from './v2Storage'
+import { computeRoundRobinMatchupProgress, buildLeagueUpNextPreview, isLeagueFreezeValid, leagueOnDeckSize } from '../../match-engines/v2/RoundRobin.engine'
+import {
+  isV2CourtsQueueUiGameType,
+  isV2RoundRobinGameType,
+  loadV2Players,
+  V2_GAME_TYPES,
+} from './v2Storage'
 
 const SKILL_RANK = {
   beginner: 0,
@@ -154,6 +159,7 @@ export default function V2CourtsView({
   allowAdjacentSkillMixing = true,
   progressivePlayFreeze = null,
   ladderRunFreeze = null,
+  leagueFreeze = null,
   onGenerateCourt = noop,
   onEditCourt = noop,
   onOpenScore = noop,
@@ -173,8 +179,10 @@ export default function V2CourtsView({
   })
 
   const checkedInPlayers = players.filter((p) => p.checkedIn)
-  const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+  const isRoundRobin = isV2RoundRobinGameType(gameType)
+  const isLeague = gameType === V2_GAME_TYPES.LEAGUE
   const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
+  const isCourtsQueueUi = isV2CourtsQueueUiGameType(gameType)
   const roundRobinProgress = useMemo(
     () =>
       isRoundRobin
@@ -218,6 +226,15 @@ export default function V2CourtsView({
       })
     : null
 
+  const leaguePreview = isLeague
+    ? buildLeagueUpNextPreview(rosterPlayers, {
+        numberOfCourts,
+        gameMode,
+        courtMatchups,
+        matchHistory,
+      })
+    : null
+
   // When a valid freeze exists, the frozen block leads the queue and only the
   // tail below it re-sorts. Otherwise fall back to the live preview ordering.
   const progressiveFreezeActive =
@@ -229,9 +246,17 @@ export default function V2CourtsView({
       numberOfCourts,
       gameMode,
     })
+  const leagueFreezeActive =
+    isLeague &&
+    isLeagueFreezeValid(leagueFreeze, rosterPlayers, courtMatchups, {
+      numberOfCourts,
+      gameMode,
+    })
   const ladderRunMaxSlots =
     Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
   const progressiveMaxSlots = Math.max(numberOfCourts, 1) * 4
+  const leagueMaxSlots =
+    Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
   const upNextPlayers = isLadderRun
     ? ladderRunFreezeActive
       ? mergeFrozenUpNextDisplay(
@@ -241,22 +266,35 @@ export default function V2CourtsView({
           ladderRunMaxSlots
         )
       : (ladderRunPreview?.queue ?? [])
-    : progressiveFreezeActive
-      ? mergeFrozenUpNextDisplay(
-          progressivePlayFreeze,
-          upNextPreview,
-          rosterPlayers,
-          progressiveMaxSlots
-        )
-      : (upNextPreview?.queue ?? [])
+    : isLeague
+      ? leagueFreezeActive
+        ? mergeFrozenUpNextDisplay(
+            leagueFreeze,
+            leaguePreview,
+            rosterPlayers,
+            leagueMaxSlots
+          )
+        : (leaguePreview?.queue ?? [])
+      : progressiveFreezeActive
+        ? mergeFrozenUpNextDisplay(
+            progressivePlayFreeze,
+            upNextPreview,
+            rosterPlayers,
+            progressiveMaxSlots
+          )
+        : (upNextPreview?.queue ?? [])
   const upNextOnDeckIds = new Set(
     isLadderRun
       ? ladderRunFreezeActive
         ? ladderRunFreeze.queueIds.slice(0, ladderRunOnDeckSize(gameMode))
         : (ladderRunPreview?.onDeckPlayers ?? []).map((player) => player.id)
-      : progressiveFreezeActive
-        ? progressivePlayFreeze.queueIds.slice(0, 4)
-        : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)
+      : isLeague
+        ? leagueFreezeActive
+          ? leagueFreeze.queueIds.slice(0, leagueOnDeckSize(gameMode))
+          : (leaguePreview?.onDeckPlayers ?? []).map((player) => player.id)
+        : progressiveFreezeActive
+          ? progressivePlayFreeze.queueIds.slice(0, 4)
+          : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)
   )
 
   const playersWithMedals = checkedInPlayers
@@ -283,7 +321,12 @@ export default function V2CourtsView({
   const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
   const showWinnersLosersSection =
     isLadderRun && (winnerPlayers.length > 0 || loserPlayers.length > 0)
-  const showUpNextSection = isLadderRun || upNextPlayers.length > 0
+  const showUpNextSection = isCourtsQueueUi || upNextPlayers.length > 0
+  const showQueueOverviewSection =
+    isCourtsQueueUi ||
+    playingPlayers.length > 0 ||
+    sittingOutPlayers.length > 0 ||
+    cooldownPlayers.length > 0
 
   const playerNameById = new Map(players.map((p) => [p.id, p.name]))
   const latestMatch = matchHistory.length > 0 ? matchHistory[matchHistory.length - 1] : null
@@ -431,6 +474,12 @@ export default function V2CourtsView({
                         skill level for the next courts.
                       </p>
                     ) : null
+                  ) : isLeague ? (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {leagueFreezeActive
+                        ? 'Highlighted players are locked in and fill the next court when you generate. New check-ins are added after the queue.'
+                        : 'Checked-in players waiting for the next court, in check-in order. Highlighted players fill the next court when you generate.'}
+                    </p>
                   ) : (
                     <p className="mt-0.5 text-xs text-slate-500">
                       {progressiveFreezeActive
@@ -568,9 +617,7 @@ export default function V2CourtsView({
         </div>
       ) : null}
 
-      {playingPlayers.length > 0 ||
-      sittingOutPlayers.length > 0 ||
-      cooldownPlayers.length > 0 ? (
+      {showQueueOverviewSection ? (
         <section
           aria-labelledby="queue-overview-heading"
           className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${

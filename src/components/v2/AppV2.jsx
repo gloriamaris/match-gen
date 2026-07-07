@@ -21,10 +21,15 @@ import {
   selectPrimaryThroneWinner,
 } from '../../match-engines/v2/ThroneRun.engine'
 import {
+  generateLeagueCourt,
   generateRoundRobinCourt,
   applyMatchResult as rrApplyMatchResult,
   revertMatchResult as rrRevertMatchResult,
   computeRoundRobinMatchupProgress,
+  advanceLeagueFreeze,
+  captureLeagueFreeze,
+  isLeagueFreezeValid,
+  materializeFrozenLeagueCourt,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
   applyLadderRunMatchResult,
@@ -64,6 +69,7 @@ import {
   DEFAULT_V2_SKILL_ADJUSTMENT,
   DEFAULT_V2_WIN_STREAK,
   V2_GAME_TYPES,
+  isV2RoundRobinGameType,
   loadV2AllowAdjacentSkillMixing,
   loadV2CourtMatchups,
   loadV2Courts,
@@ -163,6 +169,9 @@ export default function AppV2() {
   // Frozen Up Next block for Ladder Run. Keeps the queue stable across score
   // entry; new eligible players are appended at the tail only.
   const [ladderRunFreeze, setLadderRunFreeze] = useState(null)
+  // Frozen Up Next block for League. Keeps the queue stable across score entry;
+  // new eligible players are appended at the tail only.
+  const [leagueFreeze, setLeagueFreeze] = useState(null)
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
     courtIndex: null,
@@ -292,6 +301,41 @@ export default function AppV2() {
   ])
 
   useEffect(() => {
+    if (gameType !== V2_GAME_TYPES.LEAGUE) {
+      setLeagueFreeze((prev) => (prev === null ? prev : null))
+      return
+    }
+    const roster = loadV2Players()
+    const valid =
+      leagueFreeze &&
+      leagueFreeze.numberOfCourts === numberOfCourts &&
+      leagueFreeze.gameMode === gameMode &&
+      isLeagueFreezeValid(leagueFreeze, roster, courtMatchups, {
+        numberOfCourts,
+        gameMode,
+      })
+    if (valid) return
+    const next = captureLeagueFreeze(roster, {
+      courtMatchups: courtMatchups ?? [],
+      numberOfCourts,
+      gameMode,
+      matchHistory,
+    })
+    setLeagueFreeze((prev) => {
+      if (prev === null && next === null) return prev
+      return next
+    })
+  }, [
+    gameType,
+    gameMode,
+    numberOfCourts,
+    courtMatchups,
+    players,
+    matchHistory,
+    leagueFreeze,
+  ])
+
+  useEffect(() => {
     return () => {
       if (startTimeoutRef.current) {
         window.clearTimeout(startTimeoutRef.current)
@@ -402,6 +446,7 @@ export default function AppV2() {
       setMatchHistory([])
       setProgressivePlayFreeze(null)
       setLadderRunFreeze(null)
+      setLeagueFreeze(null)
       setActiveView('setup')
       setIsEndingSession(false)
       endTimeoutRef.current = null
@@ -423,7 +468,7 @@ export default function AppV2() {
   }
 
   const isRoundRobinComplete = (playerList) => {
-    if (gameType !== V2_GAME_TYPES.ROUND_ROBIN) return false
+    if (!isV2RoundRobinGameType(gameType)) return false
     const { remaining, total } = computeRoundRobinMatchupProgress(playerList, {
       gameMode,
     })
@@ -500,9 +545,51 @@ export default function AppV2() {
 
       let generatedCourt = null
 
-      const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+      const isRoundRobin = isV2RoundRobinGameType(gameType)
+      const isLeague = gameType === V2_GAME_TYPES.LEAGUE
 
-      if (isRoundRobin) {
+      if (isLeague) {
+        const freezeUsable =
+          leagueFreeze &&
+          leagueFreeze.numberOfCourts === numberOfCourts &&
+          leagueFreeze.gameMode === gameMode &&
+          isLeagueFreezeValid(leagueFreeze, currentPlayers, courtMatchups ?? [], {
+            numberOfCourts,
+            gameMode,
+          })
+
+        if (freezeUsable) {
+          generatedCourt = materializeFrozenLeagueCourt(
+            leagueFreeze,
+            currentPlayers,
+            {
+              gameMode,
+              courtIndex,
+            }
+          )
+        }
+
+        if (!generatedCourt) {
+          generatedCourt =
+            gameMode === 'doubles'
+              ? generateLeagueCourt(effectivePlayers, {
+                  courtIndex,
+                  courtMatchups: courtMatchups ?? [],
+                  matchHistory,
+                  courts: numberOfCourts,
+                  gameMode,
+                  excludePlayerIds: otherCourtPlayerIds,
+                })
+              : generateRoundRobinCourt(effectivePlayers, {
+                  courtIndex,
+                  courtMatchups: courtMatchups ?? [],
+                  matchHistory,
+                  courts: numberOfCourts,
+                  gameMode,
+                  excludePlayerIds: otherCourtPlayerIds,
+                })
+        }
+      } else if (isRoundRobin) {
         generatedCourt = generateRoundRobinCourt(effectivePlayers, {
           courtIndex,
           courtMatchups: courtMatchups ?? [],
@@ -757,6 +844,25 @@ export default function AppV2() {
         )
         setLadderRunFreeze(nextFreeze)
       }
+
+      if (gameType === V2_GAME_TYPES.LEAGUE && leagueFreeze) {
+        const generatedIds = [
+          ...generatedCourt.teamA,
+          ...generatedCourt.teamB,
+        ].map((player) => player.id)
+        const nextFreeze = advanceLeagueFreeze(
+          leagueFreeze,
+          generatedIds,
+          currentPlayers,
+          {
+            courtMatchups: nextMatchups,
+            numberOfCourts,
+            gameMode,
+            matchHistory,
+          }
+        )
+        setLeagueFreeze(nextFreeze)
+      }
     } catch (error) {
       setErrorModal({
         isOpen: true,
@@ -850,7 +956,7 @@ export default function AppV2() {
     const teamBIds = matchup.teamB.map((p) => p.id)
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
-    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isRoundRobin = isV2RoundRobinGameType(gameType)
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     let updatedPlayers
@@ -954,7 +1060,7 @@ export default function AppV2() {
 
   const handleAddManualMatch = ({ court, teamAIds, teamBIds, scoreA, scoreB, enteredBy }) => {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
-    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isRoundRobin = isV2RoundRobinGameType(gameType)
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     const { players: updatedPlayers, historyEntry } = isRoundRobin
@@ -1019,7 +1125,7 @@ export default function AppV2() {
 
     let currentPlayers = players
     const importedEntries = []
-    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isRoundRobin = isV2RoundRobinGameType(gameType)
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     matches.forEach((match) => {
@@ -1098,7 +1204,7 @@ export default function AppV2() {
     const oldMatch = matchHistory[matchIndex]
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
-    const isRoundRobin = gameType === V2_GAME_TYPES.ROUND_ROBIN
+    const isRoundRobin = isV2RoundRobinGameType(gameType)
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
     const useThroneRunEngine =
       isThroneRun &&
@@ -1482,6 +1588,7 @@ export default function AppV2() {
               allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               progressivePlayFreeze={progressivePlayFreeze}
               ladderRunFreeze={ladderRunFreeze}
+              leagueFreeze={leagueFreeze}
               onGenerateCourt={handleGenerateCourt}
               onEditCourt={handleOpenEditCourt}
               onOpenScore={handleOpenScore}

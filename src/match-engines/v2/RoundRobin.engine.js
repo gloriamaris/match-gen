@@ -21,6 +21,8 @@
 //   applyMatchResult(players, { courtIndex, teamAIds, teamBIds, winningTeam })
 //   revertMatchResult(players, { teamAIds, teamBIds, winningTeam })
 
+import { getAllOnCourtPlayerIds } from './progressivePlayCourtRefresh'
+
 // -----------------------------------------------------------------------------
 // 1. Helpers
 // -----------------------------------------------------------------------------
@@ -61,6 +63,17 @@ const metCount = (a, b) =>
 
 const gamesPlayedOf = (player) => Number(player.gamesPlayed) || 0
 
+const SKILL_RANK = {
+  beginner: 0,
+  novice: 1,
+  intermediate: 2,
+  advanced: 3,
+}
+
+const normalizeSkillLevel = (level) => String(level ?? '').trim().toLowerCase()
+
+const skillRankOf = (level) => SKILL_RANK[normalizeSkillLevel(level)] ?? 0
+
 // Map of playerId -> locked teammate id, for mutually-paired players that are
 // both present in `players`. Locked pairs always play on the same team.
 const buildLockedPartnerMap = (players) => {
@@ -80,9 +93,14 @@ const buildLockedPartnerMap = (players) => {
 const arePartnersLocked = (lockedPartner, aId, bId) =>
   lockedPartner.get(aId) === bId
 
+const cooldownWindowForCourts = (courtSlots) =>
+  Math.max(courtSlots || 1, 1) <= 3 ? 1 : 2
+
 // Players who appeared in the most recent `courtSlots` match-history entries.
 const getCooldownIds = (matchHistory, courtSlots) => {
-  const recentEntries = (matchHistory ?? []).slice(-Math.max(courtSlots || 1, 1))
+  const recentEntries = (matchHistory ?? []).slice(
+    -cooldownWindowForCourts(courtSlots)
+  )
   const cooldownIds = new Set()
   recentEntries.forEach((entry) => {
     ;(entry.teamAIds ?? []).forEach((id) => cooldownIds.add(id))
@@ -216,6 +234,145 @@ const partitionFoursomeWithLocks = (four, lockedPartner) => {
   return partitionFoursome(four)
 }
 
+const hasPartneredBefore = (a, b) =>
+  partnerCount(a, b.id) > 0 || partnerCount(b, a.id) > 0
+
+const hasOpposedBefore = (a, b) =>
+  opponentCount(a, b.id) > 0 || opponentCount(b, a.id) > 0
+
+const isMixedGender = (a, b) => {
+  const left = String(a?.gender ?? '').trim().toLowerCase()
+  const right = String(b?.gender ?? '').trim().toLowerCase()
+  if (!left || !right) return false
+  return left !== right
+}
+
+const isMixedSkill = (a, b) => skillRankOf(a?.skillLevel) !== skillRankOf(b?.skillLevel)
+
+const enumerateDoublesAssignments = (batch) => [
+  {
+    teamA: [batch[0], batch[1]],
+    teamB: [batch[2], batch[3]],
+    index: 0,
+  },
+  {
+    teamA: [batch[0], batch[2]],
+    teamB: [batch[1], batch[3]],
+    index: 1,
+  },
+  {
+    teamA: [batch[0], batch[3]],
+    teamB: [batch[1], batch[2]],
+    index: 2,
+  },
+]
+
+const buildLockedPairs = (group, lockedPartner) => {
+  const lockedPairs = []
+  const seen = new Set()
+
+  group.forEach((player) => {
+    if (seen.has(player.id)) return
+    const partnerId = lockedPartner.get(player.id)
+    if (!partnerId) return
+    const partner = group.find((candidate) => candidate.id === partnerId)
+    if (!partner) return
+    lockedPairs.push([player.id, partner.id])
+    seen.add(player.id)
+    seen.add(partner.id)
+  })
+
+  return lockedPairs
+}
+
+const keepsLockedPairsTogether = (teamA, teamB, lockedPairs) =>
+  lockedPairs.every(([leftId, rightId]) => {
+    const teamAIds = new Set(teamA.map((player) => player.id))
+    const teamBIds = new Set(teamB.map((player) => player.id))
+    return (
+      (teamAIds.has(leftId) && teamAIds.has(rightId)) ||
+      (teamBIds.has(leftId) && teamBIds.has(rightId))
+    )
+  })
+
+const isLeagueAssignmentFresh = (assignment) => {
+  const [a1, a2] = assignment.teamA
+  const [b1, b2] = assignment.teamB
+
+  if (hasPartneredBefore(a1, a2) || hasPartneredBefore(b1, b2)) {
+    return false
+  }
+
+  const crossPairs = [
+    [a1, b1],
+    [a1, b2],
+    [a2, b1],
+    [a2, b2],
+  ]
+  return crossPairs.every(([left, right]) => !hasOpposedBefore(left, right))
+}
+
+const scoreLeagueAssignment = (assignment) => {
+  const skillMixedCount =
+    (isMixedSkill(assignment.teamA[0], assignment.teamA[1]) ? 1 : 0) +
+    (isMixedSkill(assignment.teamB[0], assignment.teamB[1]) ? 1 : 0)
+
+  const genderMixedCount =
+    (isMixedGender(assignment.teamA[0], assignment.teamA[1]) ? 1 : 0) +
+    (isMixedGender(assignment.teamB[0], assignment.teamB[1]) ? 1 : 0)
+
+  const partnerRepeatScore =
+    partnerCount(assignment.teamA[0], assignment.teamA[1].id) +
+    partnerCount(assignment.teamA[1], assignment.teamA[0].id) +
+    partnerCount(assignment.teamB[0], assignment.teamB[1].id) +
+    partnerCount(assignment.teamB[1], assignment.teamB[0].id)
+
+  return {
+    skillMixedCount,
+    genderMixedCount,
+    partnerRepeatScore,
+    index: assignment.index,
+  }
+}
+
+const compareLeagueAssignmentScore = (left, right) => {
+  if (left.skillMixedCount !== right.skillMixedCount) {
+    return right.skillMixedCount - left.skillMixedCount
+  }
+  if (left.genderMixedCount !== right.genderMixedCount) {
+    return right.genderMixedCount - left.genderMixedCount
+  }
+  if (left.partnerRepeatScore !== right.partnerRepeatScore) {
+    return left.partnerRepeatScore - right.partnerRepeatScore
+  }
+  return left.index - right.index
+}
+
+const partitionLeagueFoursome = (four, lockedPartner = new Map()) => {
+  if (!Array.isArray(four) || four.length < 4) return null
+
+  const lockedPairs = buildLockedPairs(four, lockedPartner)
+  const freshAssignments = enumerateDoublesAssignments(four)
+    .filter((assignment) =>
+      keepsLockedPairsTogether(assignment.teamA, assignment.teamB, lockedPairs)
+    )
+    .filter((assignment) => isLeagueAssignmentFresh(assignment))
+
+  if (freshAssignments.length === 0) return null
+
+  const best = freshAssignments
+    .map((assignment) => ({
+      assignment,
+      score: scoreLeagueAssignment(assignment),
+    }))
+    .sort((left, right) =>
+      compareLeagueAssignmentScore(left.score, right.score)
+    )[0]?.assignment
+
+  if (!best) return null
+  return { teamA: best.teamA, teamB: best.teamB }
+}
+
 // -----------------------------------------------------------------------------
 // 4. Group selection
 // -----------------------------------------------------------------------------
@@ -255,6 +412,33 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
   })
 
   return best
+}
+
+const buildLeagueFoursomeWithReplacement = (
+  candidates,
+  cooldownIds,
+  lockedPartner
+) => {
+  const groups = combinations(candidates, 4)
+    .filter((group) => isLockConsistent(group, lockedPartner))
+    .map((group) => ({
+      group,
+      met: groupMetScore(group, lockedPartner),
+      games: groupGamesScore(group),
+      cooldown: groupCooldownScore(group, cooldownIds),
+    }))
+    .sort((left, right) => {
+      if (left.met !== right.met) return left.met - right.met
+      if (left.games !== right.games) return left.games - right.games
+      return left.cooldown - right.cooldown
+    })
+
+  for (const { group } of groups) {
+    const court = partitionLeagueFoursome(group, lockedPartner)
+    if (court) return court
+  }
+
+  return null
 }
 
 // Checked-in players eligible for round robin. Mutual pairs count only when
@@ -347,6 +531,74 @@ const generateRoundRobinCourt = (players, options = {}) => {
   }
 
   return partitionFoursomeWithLocks(group, lockedPartner)
+}
+
+const generateLeagueCourt = (players, options = {}) => {
+  const {
+    matchHistory = [],
+    courts = 2,
+    gameMode = 'doubles',
+    excludePlayerIds,
+  } = options
+
+  if (gameMode === 'singles') {
+    return generateRoundRobinCourt(players, options)
+  }
+
+  const teamSize = teamSizeForMode(gameMode)
+  const needed = teamSize * 2
+  const excludeIds = new Set(excludePlayerIds ?? [])
+
+  const eligible = getRoundRobinActivePlayers(players).filter(
+    (player) => !excludeIds.has(player.id)
+  )
+  if (eligible.length < needed) return null
+
+  const units = buildRoundRobinUnits(eligible)
+  const hasLockedTeams = units.some((unit) => unit.length >= 2)
+
+  if (hasLockedTeams && teamSize === 2) {
+    const unitCourt = generateRoundRobinCourtFromUnits(eligible, units, options)
+    if (unitCourt) return unitCourt
+
+    const playersById = new Map(eligible.map((player) => [player.id, player]))
+    if (countUnmetUnitPairs(units, playersById) > 0) {
+      const relaxedCourt = generateRoundRobinCourtFromUnits(eligible, units, {
+        ...options,
+        ignoreCooldown: true,
+      })
+      if (relaxedCourt) return relaxedCourt
+    }
+    return null
+  }
+
+  const cooldownIds = getCooldownIds(matchHistory, courts)
+  const lockedPartner = buildLockedPartnerMap(eligible)
+  const eligibleById = new Map(eligible.map((player) => [player.id, player]))
+  const ranked = rankByFairness(eligible, cooldownIds)
+
+  const windowSize = Math.max(needed, Math.min(CANDIDATE_WINDOW, ranked.length))
+  const candidateMap = new Map()
+  for (let i = 0; i < ranked.length && candidateMap.size < windowSize; i += 1) {
+    const player = ranked[i]
+    candidateMap.set(player.id, player)
+    const partnerId = lockedPartner.get(player.id)
+    if (partnerId && eligibleById.has(partnerId)) {
+      candidateMap.set(partnerId, eligibleById.get(partnerId))
+    }
+  }
+  const candidates = [...candidateMap.values()]
+
+  const leagueCourt = buildLeagueFoursomeWithReplacement(
+    candidates,
+    cooldownIds,
+    lockedPartner
+  )
+  if (leagueCourt) return leagueCourt
+
+  const fallbackGroup = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
+  if (!fallbackGroup) return null
+  return partitionFoursomeWithLocks(fallbackGroup, lockedPartner)
 }
 
 // -----------------------------------------------------------------------------
@@ -660,8 +912,250 @@ const computeRoundRobinMatchupProgress = (players, { gameMode = 'doubles' } = {}
   }
 }
 
+const buildLeagueUpNextPreview = (
+  players,
+  {
+    numberOfCourts = 1,
+    gameMode = 'doubles',
+    courtMatchups = [],
+    matchHistory = [],
+  } = {}
+) => {
+  const onCourtIds = new Set()
+  ;(courtMatchups ?? []).forEach((matchup) => {
+    if (!matchup) return
+    matchup.teamA?.forEach((p) => onCourtIds.add(p.id))
+    matchup.teamB?.forEach((p) => onCourtIds.add(p.id))
+  })
+
+  const checkedIn = (players ?? []).filter((p) => p.checkedIn)
+  const cooldownIds = getCooldownIds(matchHistory, numberOfCourts)
+  const sittingOut = checkedIn.filter(
+    (p) => !onCourtIds.has(p.id) && !cooldownIds.has(p.id)
+  )
+  const cooldown = checkedIn.filter(
+    (p) => !onCourtIds.has(p.id) && cooldownIds.has(p.id)
+  )
+
+  const maxSlots =
+    Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
+  const onDeckSize = gameMode === 'singles' ? 2 : 4
+
+  const allHaveZeroGames = checkedIn.every((p) => gamesPlayedOf(p) === 0)
+
+  const orderPool = (pool, cooldownSet) =>
+    allHaveZeroGames
+      ? [...pool].sort((a, b) => {
+          const orderDiff = checkInOrderOf(a) - checkInOrderOf(b)
+          if (orderDiff !== 0) return orderDiff
+          return String(a.id).localeCompare(String(b.id))
+        })
+      : rankByFairness(pool, cooldownSet)
+
+  const orderedSittingOut = orderPool(sittingOut, cooldownIds)
+  const orderedCooldown = orderPool(cooldown, new Set())
+  const ordered = [...orderedSittingOut, ...orderedCooldown]
+
+  const queue = ordered.slice(0, maxSlots)
+  const onDeckPlayers = queue.slice(0, onDeckSize)
+
+  return { queue, onDeckPlayers }
+}
+
 // -----------------------------------------------------------------------------
-// 8. Exports
+// 8. League Up Next freeze
+// -----------------------------------------------------------------------------
+
+function leagueFreezeBlockSize(numberOfCourts, gameMode) {
+  return Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
+}
+
+function leaguePlayersPerCourt(gameMode) {
+  return gameMode === 'singles' ? 2 : 4
+}
+
+function courtToTeamIds(court) {
+  if (!court) return null
+  return {
+    teamAIds: court.teamA.map((player) => player.id),
+    teamBIds: court.teamB.map((player) => player.id),
+  }
+}
+
+function onDeckCourtIds(onDeckCourt) {
+  if (!onDeckCourt) return []
+  return [...onDeckCourt.teamAIds, ...onDeckCourt.teamBIds]
+}
+
+function buildFreezeQueueIds(onDeckCourt, orderedIds, blockSize) {
+  const queueIds = []
+  const seen = new Set()
+  const pushId = (id) => {
+    if (id == null || seen.has(id)) return
+    queueIds.push(id)
+    seen.add(id)
+  }
+  onDeckCourtIds(onDeckCourt).forEach(pushId)
+  for (const id of orderedIds) {
+    if (queueIds.length >= blockSize) break
+    pushId(id)
+  }
+  return queueIds.slice(0, Math.max(blockSize, onDeckCourtIds(onDeckCourt).length))
+}
+
+function captureLeagueFreeze(players, options = {}) {
+  const {
+    numberOfCourts = 1,
+    gameMode = 'doubles',
+    courtMatchups = [],
+    matchHistory = [],
+  } = options
+
+  const preview = buildLeagueUpNextPreview(players, {
+    numberOfCourts,
+    gameMode,
+    courtMatchups,
+    matchHistory,
+  })
+  const onDeckCourt = courtToTeamIds(
+    generateLeagueCourt(players, {
+      courtMatchups,
+      matchHistory,
+      courts: numberOfCourts,
+      gameMode,
+      excludePlayerIds: getAllOnCourtPlayerIds(courtMatchups),
+    })
+  )
+  const queueIds = buildFreezeQueueIds(
+    onDeckCourt,
+    (preview.queue ?? []).map((player) => player.id),
+    leagueFreezeBlockSize(numberOfCourts, gameMode)
+  )
+
+  if (queueIds.length === 0) return null
+
+  return {
+    queueIds,
+    onDeckCourt,
+    numberOfCourts,
+    gameMode,
+  }
+}
+
+function isLeagueFreezeValid(snapshot, players, courtMatchups, options = {}) {
+  const { numberOfCourts = 1, gameMode = 'doubles' } = options
+  if (!snapshot?.queueIds?.length) return false
+  if (snapshot.numberOfCourts !== numberOfCourts) return false
+  if (snapshot.gameMode !== gameMode) return false
+
+  const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  const onCourtIds = new Set(getAllOnCourtPlayerIds(courtMatchups))
+  return snapshot.queueIds.every((id) => {
+    const player = byId.get(id)
+    return Boolean(player?.checkedIn) && !onCourtIds.has(id)
+  })
+}
+
+function materializeLeagueFreezePlayers(snapshot, players) {
+  if (!snapshot?.queueIds?.length) return []
+  const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  return snapshot.queueIds.map((id) => byId.get(id)).filter(Boolean)
+}
+
+function materializeFrozenLeagueCourt(snapshot, players, options = {}) {
+  const { gameMode = snapshot?.gameMode ?? 'doubles', courtIndex = 0 } = options
+  if (!snapshot?.queueIds?.length) return null
+
+  const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  const playersPerCourt = leaguePlayersPerCourt(gameMode)
+
+  if (snapshot.onDeckCourt) {
+    const teamA = snapshot.onDeckCourt.teamAIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+    const teamB = snapshot.onDeckCourt.teamBIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+    if (teamA.length + teamB.length === playersPerCourt) {
+      return { courtIndex, teamA, teamB }
+    }
+  }
+
+  const topPlayers = snapshot.queueIds
+    .slice(0, playersPerCourt)
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+  if (topPlayers.length < playersPerCourt) return null
+
+  if (gameMode === 'singles') {
+    return {
+      courtIndex,
+      teamA: [topPlayers[0]],
+      teamB: [topPlayers[1]],
+    }
+  }
+
+  const lockedPartner = buildLockedPartnerMap(topPlayers)
+  const partition =
+    partitionLeagueFoursome(topPlayers, lockedPartner) ??
+    partitionFoursomeWithLocks(topPlayers, lockedPartner)
+  return {
+    courtIndex,
+    teamA: partition.teamA,
+    teamB: partition.teamB,
+  }
+}
+
+function advanceLeagueFreeze(snapshot, generatedPlayerIds, players, options = {}) {
+  const numberOfCourts = options.numberOfCourts ?? snapshot?.numberOfCourts ?? 1
+  const gameMode = options.gameMode ?? snapshot?.gameMode ?? 'doubles'
+  const playersPerCourt = leaguePlayersPerCourt(gameMode)
+  const generatedSet = new Set(generatedPlayerIds)
+
+  const fresh = captureLeagueFreeze(players, {
+    ...options,
+    numberOfCourts,
+    gameMode,
+  })
+  if (!fresh) return null
+
+  const onDeckCourt = fresh.onDeckCourt
+  const leadIds = onDeckCourt
+    ? onDeckCourtIds(onDeckCourt)
+    : fresh.queueIds.slice(0, playersPerCourt)
+  const leadSet = new Set(leadIds)
+  const blockSize = leagueFreezeBlockSize(numberOfCourts, gameMode)
+  const merged = [...leadIds]
+  const mergedSet = new Set(merged)
+
+  const appendFrom = (ids) => {
+    for (const id of ids) {
+      if (merged.length >= blockSize) break
+      if (mergedSet.has(id) || generatedSet.has(id) || leadSet.has(id)) continue
+      merged.push(id)
+      mergedSet.add(id)
+    }
+  }
+
+  appendFrom(snapshot?.queueIds ?? [])
+  appendFrom(fresh.queueIds)
+
+  if (merged.length === 0) return null
+
+  return {
+    queueIds: merged,
+    onDeckCourt,
+    numberOfCourts,
+    gameMode,
+  }
+}
+
+function leagueOnDeckSize(gameMode = 'doubles') {
+  return leaguePlayersPerCourt(gameMode)
+}
+
+// -----------------------------------------------------------------------------
+// 9. Exports
 // -----------------------------------------------------------------------------
 
 export {
@@ -671,6 +1165,14 @@ export {
   metCount,
   matchSignature,
   computeRoundRobinMatchupProgress,
+  buildLeagueUpNextPreview,
+  generateLeagueCourt,
+  captureLeagueFreeze,
+  isLeagueFreezeValid,
+  materializeLeagueFreezePlayers,
+  materializeFrozenLeagueCourt,
+  advanceLeagueFreeze,
+  leagueOnDeckSize,
   generateRoundRobinCourt,
   applyMatchResult,
   revertMatchResult,

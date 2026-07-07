@@ -9,28 +9,15 @@ const inactiveButton =
 
 const GAME_TYPE_OPTIONS = [
   {
-    id: V2_GAME_TYPES.ROUND_ROBIN,
-    label: 'Round Robin',
-    description:
-      'Players follow a fixed rotation schedule so everyone partners with and plays against each other over the session.',
-  },
-  {
-    id: V2_GAME_TYPES.PROGRESSIVE_PLAY,
-    label: 'Progressive Play',
-    description:
-      'Players are grouped by skill level, and after each round, winners are matched with winners and vice versa.',
-  },
-  {
-    id: V2_GAME_TYPES.THRONE_RUN,
-    label: 'Throne Run',
-    description:
-      'Winners may stay on court with new partners, or yield when enough lower-game players are waiting.',
-  },
-  {
     id: V2_GAME_TYPES.LADDER_RUN,
     label: 'Ladder Run',
     description:
       'The order of who you play against is not predetermined but is created depending on the results of other matches.',
+  },
+  {
+    id: V2_GAME_TYPES.LEAGUE,
+    label: 'League',
+    description: 'Every player faces every other player at least once.',
   },
 ]
 

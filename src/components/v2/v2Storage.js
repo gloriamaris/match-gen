@@ -12,6 +12,7 @@ export const V2_STORAGE_KEYS = {
   players: `${V2_STORAGE_PREFIX}players`,
   courtMatchups: `${V2_STORAGE_PREFIX}courtMatchups`,
   matchHistory: `${V2_STORAGE_PREFIX}matchHistory`,
+  announcementsDismissed: `${V2_STORAGE_PREFIX}announcementsDismissed`,
 }
 
 export const V2_GAME_TYPES = {
@@ -19,9 +20,33 @@ export const V2_GAME_TYPES = {
   PROGRESSIVE_PLAY: 'progressive-play',
   THRONE_RUN: 'throne-run',
   LADDER_RUN: 'ladder-run',
+  LEAGUE: 'league',
 }
 
-export const DEFAULT_V2_GAME_TYPE = V2_GAME_TYPES.PROGRESSIVE_PLAY
+export const V2_VISIBLE_GAME_TYPES = [
+  V2_GAME_TYPES.LADDER_RUN,
+  V2_GAME_TYPES.LEAGUE,
+]
+
+export function isV2RoundRobinGameType(gameType) {
+  return (
+    gameType === V2_GAME_TYPES.ROUND_ROBIN ||
+    gameType === V2_GAME_TYPES.LEAGUE
+  )
+}
+
+export function isV2CourtsQueueUiGameType(gameType) {
+  return (
+    gameType === V2_GAME_TYPES.LADDER_RUN ||
+    gameType === V2_GAME_TYPES.LEAGUE
+  )
+}
+
+export const V2_ANNOUNCEMENT_IDS = {
+  NEW_GAME_TYPES: 'new-game-types',
+}
+
+export const DEFAULT_V2_GAME_TYPE = V2_GAME_TYPES.LADDER_RUN
 export const DEFAULT_V2_GAME_MODE = 'doubles'
 export const DEFAULT_V2_COURTS = 2
 export const DEFAULT_V2_WIN_STREAK = 0
@@ -91,15 +116,43 @@ export function loadV2SessionStarted() {
 export function loadV2GameType() {
   const stored =
     window.localStorage.getItem(V2_STORAGE_KEYS.gameType) || DEFAULT_V2_GAME_TYPE
-  if (
-    stored === V2_GAME_TYPES.ROUND_ROBIN ||
-    stored === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
-    stored === V2_GAME_TYPES.THRONE_RUN ||
-    stored === V2_GAME_TYPES.LADDER_RUN
-  ) {
+  const allValid = [
+    V2_GAME_TYPES.ROUND_ROBIN,
+    V2_GAME_TYPES.PROGRESSIVE_PLAY,
+    V2_GAME_TYPES.THRONE_RUN,
+    V2_GAME_TYPES.LADDER_RUN,
+    V2_GAME_TYPES.LEAGUE,
+  ]
+  if (!allValid.includes(stored)) {
+    return DEFAULT_V2_GAME_TYPE
+  }
+  if (loadV2SessionStarted()) {
+    return stored
+  }
+  if (V2_VISIBLE_GAME_TYPES.includes(stored)) {
     return stored
   }
   return DEFAULT_V2_GAME_TYPE
+}
+
+export function loadV2DismissedAnnouncements() {
+  const stored = window.localStorage.getItem(V2_STORAGE_KEYS.announcementsDismissed)
+  if (!stored) return new Set()
+  try {
+    const parsed = JSON.parse(stored)
+    return new Set(Array.isArray(parsed) ? parsed : [])
+  } catch {
+    return new Set()
+  }
+}
+
+export function dismissV2Announcement(id) {
+  const dismissed = loadV2DismissedAnnouncements()
+  dismissed.add(id)
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.announcementsDismissed,
+    JSON.stringify([...dismissed])
+  )
 }
 
 export function loadV2GameMode() {

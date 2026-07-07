@@ -1,5 +1,6 @@
 import React from 'react'
 import V2AdjacentSkillMixingSection from './V2AdjacentSkillMixingSection'
+import V2AnnouncementsPane from './V2AnnouncementsPane'
 import V2CourtsSection from './V2CourtsSection'
 import V2GameModeSection from './V2GameModeSection'
 import V2GameTypeSection from './V2GameTypeSection'
@@ -47,6 +48,7 @@ export default function V2GameSetupPage({
       </div>
 
       <div className={selectionDisabled ? 'space-y-8 opacity-60' : 'space-y-8'}>
+        <V2AnnouncementsPane />
         <V2GameTypeSection
           gameType={gameType}
           onSelectGameType={onSelectGameType}

@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getCooldownIds,
+  generateLeagueCourt,
   generateRoundRobinCourt,
   applyMatchResult,
   revertMatchResult,
   metCount,
   computeRoundRobinMatchupProgress,
+  buildLeagueUpNextPreview,
+  captureLeagueFreeze,
+  isLeagueFreezeValid,
+  advanceLeagueFreeze,
 } from '../RoundRobin.engine'
+import { mergeFrozenUpNextDisplay } from '../progressivePlayCourtRefresh'
 
 const mk = (id, overrides = {}) => ({
   id,
@@ -33,7 +40,63 @@ const playGame = (players, court, winningTeam = 'A') => {
   return { players: next, historyEntry }
 }
 
+const isFreshCourt = (players, court) => {
+  const byId = new Map(players.map((player) => [player.id, player]))
+  const [a1, a2] = court.teamA.map((player) => byId.get(player.id))
+  const [b1, b2] = court.teamB.map((player) => byId.get(player.id))
+  if (!a1 || !a2 || !b1 || !b2) return false
+
+  const partneredBefore = (left, right) =>
+    (Number(left.partnerCounts?.[right.id]) || 0) > 0 ||
+    (Number(right.partnerCounts?.[left.id]) || 0) > 0
+  const opposedBefore = (left, right) =>
+    (Number(left.opponentCounts?.[right.id]) || 0) > 0 ||
+    (Number(right.opponentCounts?.[left.id]) || 0) > 0
+
+  if (partneredBefore(a1, a2) || partneredBefore(b1, b2)) return false
+  const crossPairs = [
+    [a1, b1],
+    [a1, b2],
+    [a2, b1],
+    [a2, b2],
+  ]
+  return crossPairs.every(([left, right]) => !opposedBefore(left, right))
+}
+
 describe('computeRoundRobinMatchupProgress', () => {
+  it('uses one-match cooldown window when courts are 3 or fewer', () => {
+    const cooldown = getCooldownIds(
+      [
+        { teamAIds: ['a', 'b'], teamBIds: ['c', 'd'] },
+        { teamAIds: ['e', 'f'], teamBIds: ['g', 'h'] },
+      ],
+      3
+    )
+
+    expect([...cooldown].sort()).toEqual(['e', 'f', 'g', 'h'])
+  })
+
+  it('uses two-match cooldown window when courts are 4 or more', () => {
+    const cooldown = getCooldownIds(
+      [
+        { teamAIds: ['a', 'b'], teamBIds: ['c', 'd'] },
+        { teamAIds: ['e', 'f'], teamBIds: ['g', 'h'] },
+      ],
+      4
+    )
+
+    expect([...cooldown].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+      'f',
+      'g',
+      'h',
+    ])
+  })
+
   it('returns 0/0 when not enough checked-in players', () => {
     expect(
       computeRoundRobinMatchupProgress([mk('a')], { gameMode: 'doubles' })
@@ -578,5 +641,407 @@ describe('applyMatchResult / revertMatchResult', () => {
     }
 
     expect(seen.size).toBe(6)
+  })
+})
+
+describe('generateLeagueCourt — doubles priorities', () => {
+  it('prefers mixed-skill teams when fresh assignments exist', () => {
+    const players = [
+      mk('a', { skillLevel: 'Beginner', gender: 'Male' }),
+      mk('b', { skillLevel: 'Beginner', gender: 'Male' }),
+      mk('c', { skillLevel: 'Advanced', gender: 'Male' }),
+      mk('d', { skillLevel: 'Advanced', gender: 'Male' }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const teamASkills = new Set(court.teamA.map((player) => player.skillLevel))
+    const teamBSkills = new Set(court.teamB.map((player) => player.skillLevel))
+    expect(teamASkills.size).toBe(2)
+    expect(teamBSkills.size).toBe(2)
+    expect(isFreshCourt(players, court)).toBe(true)
+  })
+
+  it('prefers mixed-gender teams when skill preference is tied', () => {
+    const players = [
+      mk('a', { skillLevel: 'Beginner', gender: 'Male' }),
+      mk('b', { skillLevel: 'Advanced', gender: 'Male' }),
+      mk('c', { skillLevel: 'Beginner', gender: 'Female' }),
+      mk('d', { skillLevel: 'Advanced', gender: 'Female' }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const teamAGenders = new Set(court.teamA.map((player) => player.gender))
+    const teamBGenders = new Set(court.teamB.map((player) => player.gender))
+    expect(teamAGenders.size).toBe(2)
+    expect(teamBGenders.size).toBe(2)
+    expect(isFreshCourt(players, court)).toBe(true)
+  })
+
+  it('falls back to original pairing when no fresh combinations exist', () => {
+    const repeatedCounts = { b: 1, c: 1, d: 1 }
+    const players = [
+      mk('a', {
+        partnerCounts: repeatedCounts,
+        opponentCounts: repeatedCounts,
+      }),
+      mk('b', {
+        partnerCounts: { a: 1, c: 1, d: 1 },
+        opponentCounts: { a: 1, c: 1, d: 1 },
+      }),
+      mk('c', {
+        partnerCounts: { a: 1, b: 1, d: 1 },
+        opponentCounts: { a: 1, b: 1, d: 1 },
+      }),
+      mk('d', {
+        partnerCounts: { a: 1, b: 1, c: 1 },
+        opponentCounts: { a: 1, b: 1, c: 1 },
+      }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    expect(court).not.toBeNull()
+    expect(court.teamA).toHaveLength(2)
+    expect(court.teamB).toHaveLength(2)
+  })
+
+  it('replaces exhausted foursomes and finds a fresh combination', () => {
+    const players = [
+      mk('a', {
+        queueOrder: 1,
+        partnerCounts: { b: 1, c: 1, d: 1 },
+        opponentCounts: { b: 1, c: 1, d: 1 },
+      }),
+      mk('b', {
+        queueOrder: 2,
+        partnerCounts: { a: 1, c: 1, d: 1 },
+        opponentCounts: { a: 1, c: 1, d: 1 },
+      }),
+      mk('c', {
+        queueOrder: 3,
+        partnerCounts: { a: 1, b: 1, d: 1 },
+        opponentCounts: { a: 1, b: 1, d: 1 },
+      }),
+      mk('d', {
+        queueOrder: 4,
+        partnerCounts: { a: 1, b: 1, c: 1 },
+        opponentCounts: { a: 1, b: 1, c: 1 },
+      }),
+      mk('e', { queueOrder: 5, skillLevel: 'Novice', gender: 'Male' }),
+      mk('f', { queueOrder: 6, skillLevel: 'Intermediate', gender: 'Female' }),
+      mk('g', { queueOrder: 7, skillLevel: 'Beginner', gender: 'Female' }),
+      mk('h', { queueOrder: 8, skillLevel: 'Advanced', gender: 'Male' }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosenIds = new Set([...court.teamA, ...court.teamB].map((player) => player.id))
+    expect(chosenIds.has('e')).toBe(true)
+    expect(chosenIds.has('f')).toBe(true)
+    expect(isFreshCourt(players, court)).toBe(true)
+  })
+
+  it('keeps locked pairs together in league doubles', () => {
+    const players = [
+      mk('a', { teammateId: 'b', skillLevel: 'Beginner', gender: 'Male' }),
+      mk('b', { teammateId: 'a', skillLevel: 'Advanced', gender: 'Female' }),
+      mk('c', { skillLevel: 'Beginner', gender: 'Male' }),
+      mk('d', { skillLevel: 'Advanced', gender: 'Female' }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const sameTeam =
+      (court.teamA.some((player) => player.id === 'a') &&
+        court.teamA.some((player) => player.id === 'b')) ||
+      (court.teamB.some((player) => player.id === 'a') &&
+        court.teamB.some((player) => player.id === 'b'))
+    expect(sameTeam).toBe(true)
+  })
+})
+
+describe('buildLeagueUpNextPreview', () => {
+  it('limits doubles Up Next to courts * 4 in check-in order when all games are 0', () => {
+    const players = [
+      mk('d', { queueOrder: 4 }),
+      mk('a', { queueOrder: 1 }),
+      mk('c', { queueOrder: 3 }),
+      mk('b', { queueOrder: 2 }),
+      mk('e', { queueOrder: 5 }),
+      mk('f', { queueOrder: 6 }),
+      mk('g', { queueOrder: 7 }),
+      mk('h', { queueOrder: 8 }),
+      mk('i', { queueOrder: 9 }),
+    ]
+
+    const { queue, onDeckPlayers } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(queue.map((player) => player.id)).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+      'f',
+      'g',
+      'h',
+    ])
+    expect(onDeckPlayers.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('limits singles Up Next to courts * 2 in check-in order when all games are 0', () => {
+    const players = [
+      mk('c', { queueOrder: 3 }),
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('d', { queueOrder: 4 }),
+    ]
+
+    const { queue, onDeckPlayers } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(queue.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
+    expect(onDeckPlayers.map((player) => player.id)).toEqual(['a', 'b'])
+  })
+
+  it('excludes on-court and cooldown players from Up Next', () => {
+    const players = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4 }),
+      mk('e', { queueOrder: 5 }),
+    ]
+    const courtMatchups = [
+      {
+        teamA: [players[0], players[1]],
+        teamB: [players[2], players[3]],
+      },
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+      },
+    ]
+
+    const { queue } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups,
+      matchHistory,
+    })
+
+    expect(queue.map((player) => player.id)).toEqual(['e'])
+  })
+
+  it('orders by fewest games when not everyone has zero games', () => {
+    const players = [
+      mk('a', { queueOrder: 1, gamesPlayed: 2 }),
+      mk('b', { queueOrder: 2, gamesPlayed: 0 }),
+      mk('c', { queueOrder: 3, gamesPlayed: 1 }),
+      mk('d', { queueOrder: 4, gamesPlayed: 0 }),
+    ]
+
+    const { queue } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(queue.map((player) => player.id)).toEqual(['b', 'd', 'c', 'a'])
+  })
+
+  it('fills Up Next from sitting out first, then cooldown', () => {
+    const players = [
+      mk('a', { queueOrder: 1, gamesPlayed: 0 }),
+      mk('b', { queueOrder: 2, gamesPlayed: 0 }),
+      mk('c', { queueOrder: 3, gamesPlayed: 1 }),
+      mk('d', { queueOrder: 4, gamesPlayed: 1 }),
+      mk('e', { queueOrder: 5, gamesPlayed: 0 }),
+      mk('f', { queueOrder: 6, gamesPlayed: 0 }),
+    ]
+    const courtMatchups = [
+      {
+        teamA: [players[4], players[5]],
+        teamB: [mk('x'), mk('y')],
+      },
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['c', 'd'],
+        teamBIds: ['z1', 'z2'],
+      },
+    ]
+
+    const { queue } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups,
+      matchHistory,
+    })
+
+    // c and d are on cooldown, so they should appear only after sitting-out a and b.
+    expect(queue.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+})
+
+describe('League Up Next freeze', () => {
+  it('captures a frozen queue block sized to courts * players per court', () => {
+    const players = Array.from({ length: 8 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(snapshot).not.toBeNull()
+    expect(snapshot.queueIds).toHaveLength(8)
+    expect(snapshot.numberOfCourts).toBe(2)
+    expect(snapshot.gameMode).toBe('doubles')
+  })
+
+  it('appends newly checked-in players after the frozen queue in display order', () => {
+    const players = Array.from({ length: 4 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const expandedPlayers = [...players, mk('p5', { queueOrder: 5 })]
+    const livePreview = buildLeagueUpNextPreview(expandedPlayers, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    const merged = mergeFrozenUpNextDisplay(
+      snapshot,
+      livePreview,
+      expandedPlayers,
+      8
+    )
+
+    expect(merged.map((player) => player.id).slice(0, 4)).toEqual(
+      snapshot.queueIds.slice(0, 4)
+    )
+    expect(merged.map((player) => player.id)).toContain('p5')
+    expect(merged.map((player) => player.id).indexOf('p5')).toBe(4)
+  })
+
+  it('invalidates freeze when a queued player checks out', () => {
+    const players = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4 }),
+    ]
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const checkedOut = players.map((player) =>
+      player.id === 'c' ? { ...player, checkedIn: false } : player
+    )
+
+    expect(
+      isLeagueFreezeValid(snapshot, checkedOut, [], {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+      })
+    ).toBe(false)
+  })
+
+  it('advances freeze by leading with a fresh on-deck court and keeping tail order', () => {
+    const players = Array.from({ length: 8 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const generatedIds = snapshot.onDeckCourt
+      ? [...snapshot.onDeckCourt.teamAIds, ...snapshot.onDeckCourt.teamBIds]
+      : snapshot.queueIds.slice(0, 4)
+    const byId = new Map(players.map((player) => [player.id, player]))
+    const courtMatchups = [
+      {
+        teamA: generatedIds.slice(0, 2).map((id) => byId.get(id)),
+        teamB: generatedIds.slice(2, 4).map((id) => byId.get(id)),
+      },
+    ]
+
+    const next = advanceLeagueFreeze(snapshot, generatedIds, players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups,
+      matchHistory: [],
+    })
+
+    expect(next).not.toBeNull()
+    expect(next.queueIds).toHaveLength(4)
+    expect(next.queueIds).toEqual(['p5', 'p6', 'p7', 'p8'])
+    expect(next.queueIds.slice(0, 4)).toEqual(
+      next.onDeckCourt
+        ? [...next.onDeckCourt.teamAIds, ...next.onDeckCourt.teamBIds]
+        : next.queueIds.slice(0, 4)
+    )
+    generatedIds.forEach((id) => {
+      expect(next.queueIds).not.toContain(id)
+    })
   })
 })
