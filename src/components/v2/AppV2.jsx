@@ -881,7 +881,7 @@ export default function AppV2() {
         teamAIds,
         teamBIds,
         winningTeam,
-      })
+      }, { skillAdjustment })
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else {
@@ -970,7 +970,7 @@ export default function AppV2() {
             teamAIds,
             teamBIds,
             winningTeam,
-          })
+          }, { skillAdjustment })
         : applyMatchResult(
             players,
             { courtIndex: null, teamAIds, teamBIds, winningTeam },
@@ -1037,7 +1037,7 @@ export default function AppV2() {
               teamAIds: match.teamAIds,
               teamBIds: match.teamBIds,
               winningTeam,
-            })
+            }, { skillAdjustment })
           : applyMatchResult(
               currentPlayers,
               {
@@ -1109,7 +1109,7 @@ export default function AppV2() {
       : isRoundRobin
         ? rrRevertMatchResult(players, oldMatch)
         : isLadderRun
-          ? revertLadderRunMatchResult(players, oldMatch)
+          ? revertLadderRunMatchResult(players, oldMatch, { skillAdjustment })
         : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     let historyEntry
@@ -1144,7 +1144,7 @@ export default function AppV2() {
         teamAIds,
         teamBIds,
         winningTeam,
-      })
+      }, { skillAdjustment })
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else {
@@ -1434,7 +1434,8 @@ export default function AppV2() {
               {pageTitle}
             </h1>
             {activeView === 'courts' &&
-            gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+            (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+              gameType === V2_GAME_TYPES.LADDER_RUN) ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
                   Skill Adjustment: {skillAdjustment}
@@ -1477,6 +1478,7 @@ export default function AppV2() {
               matchHistory={matchHistory}
               checkedInCount={checkedInCount}
               winStreak={winStreak}
+              skillAdjustment={skillAdjustment}
               allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               progressivePlayFreeze={progressivePlayFreeze}
               ladderRunFreeze={ladderRunFreeze}

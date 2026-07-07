@@ -1,6 +1,4 @@
 import {
-  applyMatchResult,
-  revertMatchResult,
   canPlayerGroupsOpponents,
   checkInOrderOf,
   getCooldownIds,
@@ -8,6 +6,8 @@ import {
   hasPartneredBefore,
   highestSkillLevel,
   isMixedGender,
+  matchSignature,
+  shiftSkillLevel,
   skillBucketOf,
   skillRankOf,
   sortByCheckInOrder,
@@ -944,51 +944,176 @@ export function ladderRunOnDeckSize(gameMode = 'doubles') {
   return groupSizeForMode(gameMode)
 }
 
-export function applyLadderRunMatchResult(players, result) {
-  const base = applyMatchResult(players, result, { skillAdjustment: 1 })
+export function applyLadderRunMatchResult(players, result, options = {}) {
+  const { skillAdjustment = 1 } = options
+  const adjustmentThreshold = Math.max(1, Number(skillAdjustment) || 1)
   const { teamAIds = [], teamBIds = [], winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
   const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
-  const previousSkillById = new Map((players ?? []).map((player) => [player.id, player.skillLevel]))
+  const allMatchPlayerIds = [...teamAIds, ...teamBIds]
+  const skillChanges = {}
+  const streakChanges = {}
 
-  const updatedPlayers = base.players.map((player) => {
-    const previousSkillLevel = previousSkillById.get(player.id)
+  const updatedPlayers = (players ?? []).map((player) => {
+    if (!allMatchPlayerIds.includes(player.id)) return player
+
+    const updated = { ...player }
     if (winnerIds.has(player.id)) {
-      return {
-        ...player,
-        lastResult: 'win',
-        skillLevel: previousSkillLevel ?? player.skillLevel,
+      updated.wins = (Number(updated.wins) || 0) + 1
+      updated.gamesPlayed = (Number(updated.gamesPlayed) || 0) + 1
+      const previousSkillLevel = updated.skillLevel
+      const previousWinStreak = Number(updated.currentWinStreak) || 0
+      const previousLossStreak = Number(updated.currentLossStreak) || 0
+
+      const nextWinStreak = previousWinStreak + 1
+      if (nextWinStreak >= adjustmentThreshold) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
+        updated.currentWinStreak = 0
+      } else {
+        updated.currentWinStreak = nextWinStreak
+      }
+      updated.currentLossStreak = 0
+      updated.lastResult = 'win'
+
+      if (updated.skillLevel !== previousSkillLevel) {
+        skillChanges[player.id] = {
+          from: previousSkillLevel,
+          to: updated.skillLevel,
+          direction: 'up',
+        }
+      }
+      streakChanges[player.id] = {
+        winFrom: previousWinStreak,
+        winTo: Number(updated.currentWinStreak) || 0,
+        lossFrom: previousLossStreak,
+        lossTo: Number(updated.currentLossStreak) || 0,
+      }
+    } else if (loserIds.has(player.id)) {
+      updated.losses = (Number(updated.losses) || 0) + 1
+      updated.gamesPlayed = (Number(updated.gamesPlayed) || 0) + 1
+      const previousSkillLevel = updated.skillLevel
+      const previousWinStreak = Number(updated.currentWinStreak) || 0
+      const previousLossStreak = Number(updated.currentLossStreak) || 0
+
+      const nextLossStreak = previousLossStreak + 1
+      if (nextLossStreak >= adjustmentThreshold) {
+        updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
+        updated.currentLossStreak = 0
+      } else {
+        updated.currentLossStreak = nextLossStreak
+      }
+      updated.currentWinStreak = 0
+      updated.lastResult = 'loss'
+
+      if (updated.skillLevel !== previousSkillLevel) {
+        skillChanges[player.id] = {
+          from: previousSkillLevel,
+          to: updated.skillLevel,
+          direction: 'down',
+        }
+      }
+      streakChanges[player.id] = {
+        winFrom: previousWinStreak,
+        winTo: Number(updated.currentWinStreak) || 0,
+        lossFrom: previousLossStreak,
+        lossTo: Number(updated.currentLossStreak) || 0,
       }
     }
-    if (loserIds.has(player.id)) {
-      return {
-        ...player,
-        lastResult: 'loss',
-        skillLevel: previousSkillLevel ?? player.skillLevel,
+
+    const partnerCounts = { ...(updated.partnerCounts ?? {}) }
+    const ownTeam = winnerIds.has(player.id) ? [...winnerIds] : [...loserIds]
+    ownTeam.forEach((id) => {
+      if (id !== player.id) {
+        partnerCounts[id] = (Number(partnerCounts[id]) || 0) + 1
       }
-    }
-    return player
+    })
+    updated.partnerCounts = partnerCounts
+
+    const opponentCountsObj = { ...(updated.opponentCounts ?? {}) }
+    const opposingTeam = winnerIds.has(player.id) ? [...loserIds] : [...winnerIds]
+    opposingTeam.forEach((id) => {
+      opponentCountsObj[id] = (Number(opponentCountsObj[id]) || 0) + 1
+    })
+    updated.opponentCounts = opponentCountsObj
+
+    return updated
   })
 
   return {
     players: updatedPlayers,
     historyEntry: {
-      ...base.historyEntry,
-      skillChanges: {},
+      courtIndex: result.courtIndex,
+      teamAIds: [...teamAIds],
+      teamBIds: [...teamBIds],
+      winningTeam,
+      signature: matchSignature(teamAIds, teamBIds),
+      timestamp: Date.now(),
+      skillChanges,
+      streakChanges,
     },
   }
 }
 
 export function revertLadderRunMatchResult(players, result) {
-  const previousSkillById = new Map((players ?? []).map((player) => [player.id, player.skillLevel]))
-  const revertedPlayers = revertMatchResult(players, result, { skillAdjustment: 1 })
-  const matchPlayerIds = new Set([...(result.teamAIds ?? []), ...(result.teamBIds ?? [])])
+  const { teamAIds = [], teamBIds = [], winningTeam } = result
+  const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
+  const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
+  const allMatchPlayerIds = [...teamAIds, ...teamBIds]
+  const streakChanges = result.streakChanges ?? {}
+  const skillChanges = result.skillChanges ?? {}
 
-  return revertedPlayers.map((player) => {
-    if (!matchPlayerIds.has(player.id)) return player
-    return {
-      ...player,
-      skillLevel: previousSkillById.get(player.id) ?? player.skillLevel,
+  return (players ?? []).map((player) => {
+    if (!allMatchPlayerIds.includes(player.id)) return player
+    const updated = { ...player }
+
+    if (winnerIds.has(player.id)) {
+      updated.wins = Math.max(0, (Number(updated.wins) || 0) - 1)
+      updated.gamesPlayed = Math.max(0, (Number(updated.gamesPlayed) || 0) - 1)
+    } else if (loserIds.has(player.id)) {
+      updated.losses = Math.max(0, (Number(updated.losses) || 0) - 1)
+      updated.gamesPlayed = Math.max(0, (Number(updated.gamesPlayed) || 0) - 1)
     }
+
+    const streakChange = streakChanges[player.id]
+    if (streakChange) {
+      updated.currentWinStreak = Math.max(0, Number(streakChange.winFrom) || 0)
+      updated.currentLossStreak = Math.max(0, Number(streakChange.lossFrom) || 0)
+    } else if (winnerIds.has(player.id)) {
+      updated.currentWinStreak = Math.max(0, (Number(updated.currentWinStreak) || 0) - 1)
+      updated.currentLossStreak = 0
+    } else if (loserIds.has(player.id)) {
+      updated.currentLossStreak = Math.max(0, (Number(updated.currentLossStreak) || 0) - 1)
+      updated.currentWinStreak = 0
+    }
+
+    const skillChange = skillChanges[player.id]
+    if (skillChange?.from) {
+      updated.skillLevel = skillChange.from
+    }
+
+    const partnerCounts = { ...(updated.partnerCounts ?? {}) }
+    const ownTeam = winnerIds.has(player.id) ? [...winnerIds] : [...loserIds]
+    ownTeam.forEach((id) => {
+      if (id === player.id) return
+      const nextCount = Math.max(0, (Number(partnerCounts[id]) || 0) - 1)
+      if (nextCount === 0) delete partnerCounts[id]
+      else partnerCounts[id] = nextCount
+    })
+    updated.partnerCounts = partnerCounts
+
+    const opponentCountsObj = { ...(updated.opponentCounts ?? {}) }
+    const opposingTeam = winnerIds.has(player.id) ? [...loserIds] : [...winnerIds]
+    opposingTeam.forEach((id) => {
+      const nextCount = Math.max(0, (Number(opponentCountsObj[id]) || 0) - 1)
+      if (nextCount === 0) delete opponentCountsObj[id]
+      else opponentCountsObj[id] = nextCount
+    })
+    updated.opponentCounts = opponentCountsObj
+
+    if (updated.gamesPlayed === 0) {
+      updated.lastResult = null
+    }
+
+    return updated
   })
 }

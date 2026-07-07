@@ -70,7 +70,8 @@ export default function V2GameSetupPage({
             disabled={selectionDisabled}
           />
         ) : null}
-        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ? (
+        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+        gameType === V2_GAME_TYPES.LADDER_RUN ? (
           <V2SkillAdjustmentSection
             skillAdjustment={skillAdjustment}
             onSelectSkillAdjustment={onSelectSkillAdjustment}

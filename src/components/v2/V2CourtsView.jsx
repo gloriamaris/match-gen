@@ -150,6 +150,7 @@ export default function V2CourtsView({
   matchHistory = [],
   checkedInCount = 0,
   winStreak = 0,
+  skillAdjustment = 1,
   allowAdjacentSkillMixing = true,
   progressivePlayFreeze = null,
   ladderRunFreeze = null,
@@ -287,7 +288,7 @@ export default function V2CourtsView({
   const playerNameById = new Map(players.map((p) => [p.id, p.name]))
   const latestMatch = matchHistory.length > 0 ? matchHistory[matchHistory.length - 1] : null
   const latestSkillMovements =
-    isLadderRun || !latestMatch?.skillChanges
+    !latestMatch?.skillChanges
       ? []
       : Object.entries(latestMatch.skillChanges)
           .map(([playerId, change]) => ({
@@ -303,6 +304,9 @@ export default function V2CourtsView({
             }
             return a.name.localeCompare(b.name)
           })
+  const showSkillMovementsSection =
+    gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+    gameType === V2_GAME_TYPES.LADDER_RUN
 
   const courts = Array.from({ length: numberOfCourts }, (_, index) => {
     const matchup = courtMatchups?.[index] ?? null
@@ -429,7 +433,7 @@ export default function V2CourtsView({
                     ) : null
                   ) : (
                     <p className="mt-0.5 text-xs text-slate-500">
-                      {freezeActive
+                      {progressiveFreezeActive
                         ? 'Highlighted players are locked in and fill the next court when you generate. The rest stay in order until then; players further down may shift as scores come in.'
                         : 'Fairness-ordered queue — the highlighted players fill the next court when you generate, the rest follow in priority order'}
                     </p>
@@ -687,7 +691,7 @@ export default function V2CourtsView({
         </section>
       ) : null}
 
-      {latestSkillMovements.length > 0 ? (
+      {showSkillMovementsSection ? (
         <section
           aria-labelledby="skill-movements-heading"
           className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
@@ -703,43 +707,49 @@ export default function V2CourtsView({
               Changes from the most recent scored match.
             </p>
           </div>
-          <ul className="divide-y divide-slate-100">
-            {latestSkillMovements.map((movement) => {
-              const fromKey = normalizeSkillLevel(movement.fromLevel)
-              const toKey = normalizeSkillLevel(movement.toLevel)
-              const fromStars = SKILL_STARS_BY_LEVEL[fromKey] ?? movement.fromLevel
-              const toStars = SKILL_STARS_BY_LEVEL[toKey] ?? movement.toLevel
-              const isUp = movement.direction === 'up'
-              return (
-                <li
-                  key={movement.id}
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-3 text-sm sm:px-5"
-                >
-                  <span className="font-medium text-slate-800">
-                    {movement.name}
-                  </span>
-                  <span className="text-slate-500">from</span>
-                  <span aria-label={`from ${getSkillLabel(movement.fromLevel)}`}>
-                    {fromStars}
-                  </span>
-                  <span className="text-slate-500">to</span>
-                  <span aria-label={`to ${getSkillLabel(movement.toLevel)}`}>
-                    {toStars}
-                  </span>
-                  <span
-                    className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      isUp
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-rose-50 text-rose-700'
-                    }`}
-                    aria-label={isUp ? 'Moved up' : 'Moved down'}
+          {latestSkillMovements.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-slate-500 sm:px-5">
+              No skill movements yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {latestSkillMovements.map((movement) => {
+                const fromKey = normalizeSkillLevel(movement.fromLevel)
+                const toKey = normalizeSkillLevel(movement.toLevel)
+                const fromStars = SKILL_STARS_BY_LEVEL[fromKey] ?? movement.fromLevel
+                const toStars = SKILL_STARS_BY_LEVEL[toKey] ?? movement.toLevel
+                const isUp = movement.direction === 'up'
+                return (
+                  <li
+                    key={movement.id}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-3 text-sm sm:px-5"
                   >
-                    {isUp ? '⬆️ Up' : '⬇️ Down'}
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
+                    <span className="font-medium text-slate-800">
+                      {movement.name}
+                    </span>
+                    <span className="text-slate-500">from</span>
+                    <span aria-label={`from ${getSkillLabel(movement.fromLevel)}`}>
+                      {fromStars}
+                    </span>
+                    <span className="text-slate-500">to</span>
+                    <span aria-label={`to ${getSkillLabel(movement.toLevel)}`}>
+                      {toStars}
+                    </span>
+                    <span
+                      className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        isUp
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-rose-50 text-rose-700'
+                      }`}
+                      aria-label={isUp ? 'Moved up' : 'Moved down'}
+                    >
+                      {isUp ? '⬆️ Up' : '⬇️ Down'}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </section>
       ) : null}
 

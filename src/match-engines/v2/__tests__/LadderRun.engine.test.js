@@ -23,7 +23,7 @@ const makePlayer = (id, overrides = {}) => ({
 })
 
 describe('applyLadderRunMatchResult', () => {
-  it('stores lastResult plus partner/opponent history', () => {
+  it('stores lastResult plus partner/opponent history and skill changes', () => {
     const players = [
       makePlayer('a', { skillLevel: 'Novice' }),
       makePlayer('b', { skillLevel: 'Novice' }),
@@ -42,14 +42,25 @@ describe('applyLadderRunMatchResult', () => {
     expect(byId.get('b').lastResult).toBe('win')
     expect(byId.get('c').lastResult).toBe('loss')
     expect(byId.get('d').lastResult).toBe('loss')
-    expect(byId.get('a').skillLevel).toBe('Novice')
-    expect(byId.get('c').skillLevel).toBe('Intermediate')
+    expect(byId.get('a').skillLevel).toBe('Intermediate')
+    expect(byId.get('c').skillLevel).toBe('Novice')
+    expect(byId.get('a').currentWinStreak).toBe(0)
+    expect(byId.get('c').currentLossStreak).toBe(0)
     expect(byId.get('a').partnerCounts.b).toBe(1)
     expect(byId.get('a').opponentCounts.c).toBe(1)
-    expect(result.historyEntry.skillChanges).toEqual({})
+    expect(result.historyEntry.skillChanges.a).toEqual({
+      from: 'Novice',
+      to: 'Intermediate',
+      direction: 'up',
+    })
+    expect(result.historyEntry.skillChanges.c).toEqual({
+      from: 'Intermediate',
+      to: 'Novice',
+      direction: 'down',
+    })
   })
 
-  it('reverts wins/losses counters from a previous result', () => {
+  it('reverts wins/losses counters and skill movement from a previous result', () => {
     const players = [makePlayer('a'), makePlayer('b'), makePlayer('c'), makePlayer('d')]
     const result = applyLadderRunMatchResult(players, {
       courtIndex: 0,
@@ -57,17 +68,109 @@ describe('applyLadderRunMatchResult', () => {
       teamBIds: ['c', 'd'],
       winningTeam: 'A',
     })
-    const reverted = revertLadderRunMatchResult(result.players, {
-      courtIndex: 0,
-      teamAIds: ['a', 'b'],
-      teamBIds: ['c', 'd'],
-      winningTeam: 'A',
-    })
+    const reverted = revertLadderRunMatchResult(result.players, result.historyEntry)
     const byId = new Map(reverted.map((player) => [player.id, player]))
 
     expect(byId.get('a').gamesPlayed).toBe(0)
     expect(byId.get('a').wins).toBe(0)
+    expect(byId.get('a').skillLevel).toBe('Intermediate')
+    expect(byId.get('a').currentWinStreak).toBe(0)
     expect(byId.get('c').losses).toBe(0)
+    expect(byId.get('c').skillLevel).toBe('Intermediate')
+    expect(byId.get('c').currentLossStreak).toBe(0)
+  })
+
+  it('moves skill up/down after reaching streak threshold', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice' }),
+      makePlayer('b', { skillLevel: 'Novice' }),
+      makePlayer('c', { skillLevel: 'Intermediate' }),
+      makePlayer('d', { skillLevel: 'Intermediate' }),
+    ]
+
+    const first = applyLadderRunMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 2 }
+    )
+    const second = applyLadderRunMatchResult(
+      first.players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 2 }
+    )
+    const byId = new Map(second.players.map((player) => [player.id, player]))
+
+    expect(byId.get('a').skillLevel).toBe('Intermediate')
+    expect(byId.get('b').skillLevel).toBe('Intermediate')
+    expect(byId.get('c').skillLevel).toBe('Novice')
+    expect(byId.get('d').skillLevel).toBe('Novice')
+    expect(byId.get('a').currentWinStreak).toBe(0)
+    expect(byId.get('c').currentLossStreak).toBe(0)
+    expect(second.historyEntry.skillChanges.a.direction).toBe('up')
+    expect(second.historyEntry.skillChanges.c.direction).toBe('down')
+  })
+
+  it('resets opposite streak after result flips', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice', currentLossStreak: 1 }),
+      makePlayer('b', { skillLevel: 'Novice' }),
+      makePlayer('c', { skillLevel: 'Intermediate', currentWinStreak: 2 }),
+      makePlayer('d', { skillLevel: 'Intermediate' }),
+    ]
+
+    const result = applyLadderRunMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 3 }
+    )
+    const byId = new Map(result.players.map((player) => [player.id, player]))
+
+    expect(byId.get('a').currentLossStreak).toBe(0)
+    expect(byId.get('a').currentWinStreak).toBe(1)
+    expect(byId.get('c').currentWinStreak).toBe(0)
+    expect(byId.get('c').currentLossStreak).toBe(1)
+  })
+
+  it('revert restores streak threshold state using history snapshot', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice', currentWinStreak: 1 }),
+      makePlayer('b', { skillLevel: 'Novice', currentWinStreak: 1 }),
+      makePlayer('c', { skillLevel: 'Intermediate', currentLossStreak: 1 }),
+      makePlayer('d', { skillLevel: 'Intermediate', currentLossStreak: 1 }),
+    ]
+
+    const scored = applyLadderRunMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 2 }
+    )
+    const reverted = revertLadderRunMatchResult(scored.players, scored.historyEntry)
+    const byId = new Map(reverted.map((player) => [player.id, player]))
+
+    expect(byId.get('a').skillLevel).toBe('Novice')
+    expect(byId.get('a').currentWinStreak).toBe(1)
+    expect(byId.get('c').skillLevel).toBe('Intermediate')
+    expect(byId.get('c').currentLossStreak).toBe(1)
   })
 })
 
