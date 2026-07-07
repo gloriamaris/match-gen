@@ -926,6 +926,44 @@ describe('buildLeagueUpNextPreview', () => {
     // c and d are on cooldown, so they should appear only after sitting-out a and b.
     expect(queue.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
   })
+
+  it('reaches courts * groupSize by topping up from cooldown at the bottom', () => {
+    const players = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4, gamesPlayed: 1 }),
+      mk('e', { queueOrder: 5, gamesPlayed: 1 }),
+      mk('f', { queueOrder: 6, gamesPlayed: 1 }),
+      mk('g', { queueOrder: 7, gamesPlayed: 1 }),
+      mk('h', { queueOrder: 8, gamesPlayed: 1 }),
+      mk('i', { queueOrder: 9, gamesPlayed: 1 }),
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['d', 'e'],
+        teamBIds: ['f', 'g'],
+      },
+    ]
+
+    const { queue } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory,
+    })
+
+    expect(queue.map((player) => player.id)).toEqual([
+      'a',
+      'b',
+      'c',
+      'h',
+      'i',
+      'd',
+      'e',
+      'f',
+    ])
+  })
 })
 
 describe('League Up Next freeze', () => {

@@ -34,9 +34,11 @@ import {
 import {
   applyLadderRunMatchResult,
   advanceLadderRunFreeze,
+  buildLadderRunUpNextPreview,
   captureLadderRunFreeze,
   generateLadderRunCourt,
   isLadderRunFreezeValid,
+  ladderRunOnDeckSize,
   materializeFrozenLadderRunCourt,
   revertLadderRunMatchResult,
 } from '../../match-engines/v2/LadderRun.engine'
@@ -269,8 +271,21 @@ export default function AppV2() {
       return
     }
     const roster = loadV2Players()
+    const preview = buildLadderRunUpNextPreview(roster, {
+      courtMatchups: courtMatchups ?? [],
+      numberOfCourts,
+      gameMode,
+      matchHistory,
+      allowAdjacentSkillMixing,
+    })
+    const onDeckSize = ladderRunOnDeckSize(gameMode)
+    const freezeUndersized =
+      ladderRunFreeze &&
+      (ladderRunFreeze.queueIds?.length ?? 0) < onDeckSize &&
+      (preview.queue?.length ?? 0) >= onDeckSize
     const valid =
       ladderRunFreeze &&
+      !freezeUndersized &&
       ladderRunFreeze.numberOfCourts === numberOfCourts &&
       ladderRunFreeze.gameMode === gameMode &&
       isLadderRunFreezeValid(ladderRunFreeze, roster, courtMatchups, {

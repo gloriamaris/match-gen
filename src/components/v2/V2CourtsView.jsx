@@ -285,9 +285,31 @@ export default function V2CourtsView({
         : (upNextPreview?.queue ?? [])
   const upNextOnDeckIds = new Set(
     isLadderRun
-      ? ladderRunFreezeActive
-        ? ladderRunFreeze.queueIds.slice(0, ladderRunOnDeckSize(gameMode))
-        : (ladderRunPreview?.onDeckPlayers ?? []).map((player) => player.id)
+      ? (() => {
+          const onDeckSize = ladderRunOnDeckSize(gameMode)
+          if (!ladderRunFreezeActive) {
+            return (ladderRunPreview?.onDeckPlayers ?? [])
+              .slice(0, onDeckSize)
+              .map((player) => player.id)
+          }
+          const frozenOnDeck = (ladderRunFreeze.queueIds ?? []).slice(0, onDeckSize)
+          const displayedOnDeck = upNextPlayers
+            .slice(0, onDeckSize)
+            .map((player) => player.id)
+          const displayedIds = new Set(upNextPlayers.map((player) => player.id))
+          const visibleFrozen = frozenOnDeck.filter((id) => displayedIds.has(id))
+          if (visibleFrozen.length >= onDeckSize) return visibleFrozen
+          const merged = [...visibleFrozen]
+          const seen = new Set(merged)
+          for (const id of displayedOnDeck) {
+            if (merged.length >= onDeckSize) break
+            if (!seen.has(id)) {
+              merged.push(id)
+              seen.add(id)
+            }
+          }
+          return merged
+        })()
       : isLeague
         ? leagueFreezeActive
           ? leagueFreeze.queueIds.slice(0, leagueOnDeckSize(gameMode))

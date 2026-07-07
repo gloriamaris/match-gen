@@ -264,7 +264,7 @@ describe('buildLadderRunUpNextPreview', () => {
     })
 
     expect(groups).toEqual([])
-    expect(queue.map((player) => player.id)).toEqual(['n1', 'n2'])
+    expect(queue.map((player) => player.id)).toEqual(['n1', 'n2', 'b1', 'b2'])
   })
 
   it('does not mix Novice with Advanced when adjacent skill mixing is on', () => {
@@ -657,6 +657,70 @@ describe('buildLadderRunUpNextPreview', () => {
     // sitting-out pool. The cooldown top-up brings n1 back and keeps the pair
     // together (collective skill level = Novice), completing the group.
     expect(preview.queue.map((player) => player.id)).toEqual(['b1', 'n1', 'n2', 'n3'])
+  })
+
+  it('fills maxSlots with sitting out first then cooldown appended at the bottom', () => {
+    const players = [
+      makePlayer('s1', { skillLevel: 'Novice', queueOrder: 1 }),
+      makePlayer('s2', { skillLevel: 'Novice', queueOrder: 2 }),
+      makePlayer('s3', { skillLevel: 'Novice', queueOrder: 3 }),
+      makePlayer('c1', { skillLevel: 'Novice', queueOrder: 4, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c2', { skillLevel: 'Novice', queueOrder: 5, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c3', { skillLevel: 'Novice', queueOrder: 6, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c4', { skillLevel: 'Novice', queueOrder: 7, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c5', { skillLevel: 'Novice', queueOrder: 8, gamesPlayed: 1, lastResult: 'win' }),
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['c1', 'c2'],
+        teamBIds: ['c3', 'c4'],
+      },
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      matchHistory,
+    })
+
+    expect(preview.queue).toHaveLength(8)
+    expect(preview.queue.map((player) => player.id)).toEqual([
+      's1',
+      's2',
+      's3',
+      'c5',
+      'c1',
+      'c2',
+      'c3',
+      'c4',
+    ])
+  })
+
+  it('tops up to maxSlots with cooldown at the bottom when sitting out is short', () => {
+    const players = [
+      makePlayer('s1', { skillLevel: 'Beginner', queueOrder: 1 }),
+      makePlayer('s2', { skillLevel: 'Novice', queueOrder: 2 }),
+      makePlayer('c1', { skillLevel: 'Novice', queueOrder: 3, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c2', { skillLevel: 'Novice', queueOrder: 4, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c3', { skillLevel: 'Novice', queueOrder: 5, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('c4', { skillLevel: 'Novice', queueOrder: 6, gamesPlayed: 1, lastResult: 'win' }),
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['c1', 'c2'],
+        teamBIds: ['c3', 'c4'],
+      },
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      allowAdjacentSkillMixing: false,
+      matchHistory,
+    })
+
+    expect(preview.queue).toHaveLength(4)
+    expect(preview.queue.map((player) => player.id)).toEqual(['s1', 's2', 'c1', 'c2'])
   })
 })
 
