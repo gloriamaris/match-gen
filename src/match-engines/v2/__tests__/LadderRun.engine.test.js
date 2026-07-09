@@ -4,6 +4,7 @@ import {
   advanceLadderRunFreeze,
   buildLadderRunUpNextPreview,
   captureLadderRunFreeze,
+  explainLadderRunUpNextEmpty,
   generateLadderRunCourt,
   getLadderRunCooldownIds,
   isLadderRunFreezeValid,
@@ -744,6 +745,92 @@ describe('buildLadderRunUpNextPreview', () => {
 
     expect(preview.queue).toHaveLength(4)
     expect(preview.queue.map((player) => player.id)).toEqual(['s2', 'c1', 'c2', 'c3'])
+  })
+})
+
+describe('explainLadderRunUpNextEmpty', () => {
+  it('returns null when Up Next has players', () => {
+    const players = Array.from({ length: 4 }, (_, index) =>
+      makePlayer(`p${index + 1}`, { skillLevel: 'Novice', queueOrder: index + 1 })
+    )
+
+    expect(
+      explainLadderRunUpNextEmpty(players, {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+      })
+    ).toBeNull()
+  })
+
+  it('explains when everyone is on court', () => {
+    const players = Array.from({ length: 4 }, (_, index) =>
+      makePlayer(`p${index + 1}`, { skillLevel: 'Novice', queueOrder: index + 1 })
+    )
+    const courtMatchups = [
+      {
+        teamA: [players[0], players[1]],
+        teamB: [players[2], players[3]],
+      },
+    ]
+
+    expect(
+      explainLadderRunUpNextEmpty(players, {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+        courtMatchups,
+      })
+    ).toBe('No checked-in players are waiting — everyone is currently on a court.')
+  })
+
+  it('explains when too few players are waiting', () => {
+    const players = [
+      makePlayer('p1', { skillLevel: 'Novice', queueOrder: 1 }),
+      makePlayer('p2', { skillLevel: 'Novice', queueOrder: 2 }),
+    ]
+
+    expect(
+      explainLadderRunUpNextEmpty(players, {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+      })
+    ).toBe('Only 2 players waiting. Need 4 to fill a doubles court.')
+  })
+
+  it('explains when waiting players are split across skill groups', () => {
+    const players = [
+      makePlayer('n1', { skillLevel: 'Novice', queueOrder: 1 }),
+      makePlayer('n2', { skillLevel: 'Novice', queueOrder: 2 }),
+      makePlayer('b1', { skillLevel: 'Beginner', queueOrder: 3 }),
+      makePlayer('b2', { skillLevel: 'Beginner', queueOrder: 4 }),
+    ]
+
+    expect(
+      explainLadderRunUpNextEmpty(players, {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+        allowAdjacentSkillMixing: false,
+      })
+    ).toBe(
+      'Players must share the same skill level, but no group of 4 is waiting. 4 players are spread across 2 skill groups.'
+    )
+  })
+
+  it('explains when veterans are split by win/loss status', () => {
+    const players = [
+      makePlayer('w1', { skillLevel: 'Novice', queueOrder: 1, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('w2', { skillLevel: 'Novice', queueOrder: 2, gamesPlayed: 1, lastResult: 'win' }),
+      makePlayer('l1', { skillLevel: 'Novice', queueOrder: 3, gamesPlayed: 1, lastResult: 'loss' }),
+      makePlayer('l2', { skillLevel: 'Novice', queueOrder: 4, gamesPlayed: 1, lastResult: 'loss' }),
+    ]
+
+    expect(
+      explainLadderRunUpNextEmpty(players, {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+      })
+    ).toBe(
+      'Waiting players at the same skill level are split between recent winners (2) and losers (2). Need 4 on the same side to form a court.'
+    )
   })
 })
 

@@ -439,6 +439,100 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
   }
 }
 
+function courtLabelForMode(gameMode) {
+  return gameMode === 'singles' ? 'singles court' : 'doubles court'
+}
+
+function bucketCanFillCourt(bucketPlayers, groupSize, matchHistory) {
+  if (bucketPlayers.length < groupSize) return false
+  if (bucketPlayers.some(hasZeroGames)) return true
+  const winners = bucketPlayers.filter(
+    (player) => getPlayerLastResult(player, matchHistory) === 'win'
+  ).length
+  const losers = bucketPlayers.filter(
+    (player) => getPlayerLastResult(player, matchHistory) === 'loss'
+  ).length
+  return winners >= groupSize || losers >= groupSize
+}
+
+export function explainLadderRunUpNextEmpty(players, options = {}) {
+  const {
+    gameMode = 'doubles',
+    allowAdjacentSkillMixing = false,
+    courtMatchups = [],
+    matchHistory = [],
+  } = options
+
+  const groupSize = groupSizeForMode(gameMode)
+  const courtLabel = courtLabelForMode(gameMode)
+  const preview = buildLadderRunUpNextPreview(players, options)
+  if (preview.queue.length > 0) return null
+
+  const sittingOut = buildSittingOutPool(players, courtMatchups, matchHistory)
+  const cooldown = buildCooldownPool(players, courtMatchups, matchHistory)
+  const eligible = mergePoolsByCheckInOrder(sittingOut, cooldown)
+
+  if (eligible.length === 0) {
+    return 'No checked-in players are waiting — everyone is currently on a court.'
+  }
+
+  if (eligible.length < groupSize) {
+    if (sittingOut.length === 0) {
+      return `Only ${eligible.length} player${eligible.length === 1 ? '' : 's'} on cooldown. Need ${groupSize} to fill a ${courtLabel}.`
+    }
+    return `Only ${eligible.length} player${eligible.length === 1 ? '' : 's'} waiting. Need ${groupSize} to fill a ${courtLabel}.`
+  }
+
+  const bucketOpts = { allowAdjacent: allowAdjacentSkillMixing }
+  const buckets = new Map()
+  eligible.forEach((player) => {
+    const key = skillBucketOf(player.skillLevel, bucketOpts)
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key).push(player)
+  })
+
+  if ([...buckets.values()].some((bucketPlayers) => bucketCanFillCourt(bucketPlayers, groupSize, matchHistory))) {
+    return `No complete group of ${groupSize} could be formed from the current waiting players.`
+  }
+
+  const bucketSummaries = [...buckets.values()].map((bucketPlayers) => ({
+    total: bucketPlayers.length,
+    zeroGame: bucketPlayers.filter(hasZeroGames).length,
+    winners: bucketPlayers.filter(
+      (player) => getPlayerLastResult(player, matchHistory) === 'win'
+    ).length,
+    losers: bucketPlayers.filter(
+      (player) => getPlayerLastResult(player, matchHistory) === 'loss'
+    ).length,
+  }))
+  const largestBucket = bucketSummaries.reduce(
+    (largest, summary) => (summary.total > largest.total ? summary : largest),
+    { total: 0, zeroGame: 0, winners: 0, losers: 0 }
+  )
+
+  if (largestBucket.total < groupSize) {
+    if (buckets.size > 1) {
+      const mixingNote = allowAdjacentSkillMixing
+        ? 'Adjacent skill levels can mix, but no compatible group of'
+        : 'Players must share the same skill level, but no group of'
+      return `${mixingNote} ${groupSize} is waiting. ${eligible.length} players are spread across ${buckets.size} skill groups.`
+    }
+    return `Not enough waiting players at the same skill level to fill a ${courtLabel} (need ${groupSize}, have ${largestBucket.total}).`
+  }
+
+  if (
+    largestBucket.zeroGame === 0 &&
+    largestBucket.winners > 0 &&
+    largestBucket.losers > 0 &&
+    largestBucket.winners < groupSize &&
+    largestBucket.losers < groupSize
+  ) {
+    return `Waiting players at the same skill level are split between recent winners (${largestBucket.winners}) and losers (${largestBucket.losers}). Need ${groupSize} on the same side to form a court.`
+  }
+
+  return `No complete group of ${groupSize} can be formed from waiting players. Check skill levels and recent win/loss status.`
+}
+
 function enumerateDoublesAssignments(batch) {
   return [
     {

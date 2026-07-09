@@ -5,6 +5,9 @@ import {
   generateRoundRobinCourt,
   applyMatchResult,
   revertMatchResult,
+  applyLeagueMatchResult,
+  revertLeagueMatchResult,
+  derivePlayerLastMatch,
   metCount,
   computeRoundRobinMatchupProgress,
   buildLeagueUpNextPreview,
@@ -644,6 +647,150 @@ describe('applyMatchResult / revertMatchResult', () => {
   })
 })
 
+describe('league lastMatch storage helpers', () => {
+  it('sets per-player lastMatch when League has more than 2 courts', () => {
+    const players = [mk('a'), mk('b'), mk('c'), mk('d')]
+    const { players: next } = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 2,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 3 }
+    )
+
+    expect(next.find((p) => p.id === 'a').lastMatch).toEqual({
+      courtIndex: 2,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'win',
+    })
+    expect(next.find((p) => p.id === 'c').lastMatch).toEqual({
+      courtIndex: 2,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'loss',
+    })
+  })
+
+  it('sets lastMatch even when League has 2 courts or fewer', () => {
+    const players = [mk('a'), mk('b'), mk('c'), mk('d')]
+    const { players: next } = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 1,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 2 }
+    )
+
+    expect(next.find((p) => p.id === 'a').lastMatch).toEqual({
+      courtIndex: 1,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'win',
+    })
+    expect(next.find((p) => p.id === 'c').lastMatch).toEqual({
+      courtIndex: 1,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'loss',
+    })
+  })
+
+  it('revertLeagueMatchResult restores prior lastMatch from history', () => {
+    const players = [mk('a'), mk('b'), mk('c'), mk('d'), mk('e'), mk('f')]
+
+    const first = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 3 }
+    )
+    const firstHistory = { ...first.historyEntry, id: 'm1', timestamp: 1000 }
+
+    const second = applyLeagueMatchResult(
+      first.players,
+      {
+        courtIndex: 1,
+        teamAIds: ['a', 'e'],
+        teamBIds: ['b', 'f'],
+        winningTeam: 'B',
+      },
+      { numberOfCourts: 3 }
+    )
+    const secondResult = {
+      courtIndex: 1,
+      teamAIds: ['a', 'e'],
+      teamBIds: ['b', 'f'],
+      winningTeam: 'B',
+      id: 'm2',
+    }
+    const secondHistory = { ...second.historyEntry, id: 'm2', timestamp: 2000 }
+
+    const reverted = revertLeagueMatchResult(second.players, secondResult, {
+      numberOfCourts: 3,
+      matchHistory: [firstHistory, secondHistory],
+    })
+
+    expect(reverted.find((p) => p.id === 'a').lastMatch).toEqual({
+      courtIndex: 0,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'win',
+    })
+    expect(reverted.find((p) => p.id === 'b').lastMatch).toEqual({
+      courtIndex: 0,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      result: 'win',
+    })
+    expect(reverted.find((p) => p.id === 'e').lastMatch).toBeNull()
+    expect(reverted.find((p) => p.id === 'f').lastMatch).toBeNull()
+  })
+
+  it('derivePlayerLastMatch picks newest timestamp from unsorted history', () => {
+    const history = [
+      {
+        timestamp: 10,
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      {
+        timestamp: 30,
+        courtIndex: 2,
+        teamAIds: ['a', 'f'],
+        teamBIds: ['g', 'h'],
+        winningTeam: 'B',
+      },
+      {
+        timestamp: 20,
+        courtIndex: 1,
+        teamAIds: ['a', 'e'],
+        teamBIds: ['i', 'j'],
+        winningTeam: 'A',
+      },
+    ]
+
+    expect(derivePlayerLastMatch('a', history)).toEqual({
+      courtIndex: 2,
+      teamAIds: ['a', 'f'],
+      teamBIds: ['g', 'h'],
+      result: 'loss',
+    })
+  })
+})
+
 describe('generateLeagueCourt — doubles priorities', () => {
   it('prefers mixed-skill teams when fresh assignments exist', () => {
     const players = [
@@ -788,6 +935,222 @@ describe('generateLeagueCourt — doubles priorities', () => {
         court.teamA.some((player) => player.id === 'b')) ||
       (court.teamB.some((player) => player.id === 'a') &&
         court.teamB.some((player) => player.id === 'b'))
+    expect(sameTeam).toBe(true)
+  })
+
+  it('keeps locked pairs together when no fresh league assignment exists', () => {
+    const repeatedCounts = { b: 1, c: 1, d: 1 }
+    const players = [
+      mk('a', {
+        teammateId: 'b',
+        partnerCounts: repeatedCounts,
+        opponentCounts: repeatedCounts,
+      }),
+      mk('b', {
+        teammateId: 'a',
+        partnerCounts: { a: 1, c: 1, d: 1 },
+        opponentCounts: { a: 1, c: 1, d: 1 },
+      }),
+      mk('c', {
+        partnerCounts: { a: 1, b: 1, d: 1 },
+        opponentCounts: { a: 1, b: 1, d: 1 },
+      }),
+      mk('d', {
+        partnerCounts: { a: 1, b: 1, c: 1 },
+        opponentCounts: { a: 1, b: 1, c: 1 },
+      }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    expect(court).not.toBeNull()
+    const sameTeam =
+      (court.teamA.some((player) => player.id === 'a') &&
+        court.teamA.some((player) => player.id === 'b')) ||
+      (court.teamB.some((player) => player.id === 'a') &&
+        court.teamB.some((player) => player.id === 'b'))
+    expect(sameTeam).toBe(true)
+  })
+})
+
+describe('generateLeagueCourt — dynamic last-court rule', () => {
+  const makeRoster = (count = 8) =>
+    Array.from({ length: count }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+
+  const selectedIds = (court) =>
+    new Set([...court.teamA, ...court.teamB].map((player) => player.id))
+
+  const withLastCourt = (players, playerId, courtIndex) =>
+    players.map((player) =>
+      player.id === playerId
+        ? {
+            ...player,
+            lastMatch: {
+              courtIndex,
+              teamAIds: [playerId, 'x1'],
+              teamBIds: ['x2', 'x3'],
+              result: 'win',
+            },
+          }
+        : player
+    )
+
+  it('uses queue head as anchor and excludes others who last played the same court', () => {
+    let players = makeRoster(8)
+    players = withLastCourt(players, 'p1', 2)
+    players = withLastCourt(players, 'p5', 2)
+    players = withLastCourt(players, 'p6', 2)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(true)
+    expect(chosen.has('p5')).toBe(false)
+    expect(chosen.has('p6')).toBe(false)
+  })
+
+  it('applies anchor-last-court exclusion even when generating a different court index', () => {
+    let players = makeRoster(8)
+    players = withLastCourt(players, 'p1', 1)
+    players = withLastCourt(players, 'p5', 1)
+    players = withLastCourt(players, 'p6', 1)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(true)
+    expect(chosen.has('p5')).toBe(false)
+    expect(chosen.has('p6')).toBe(false)
+  })
+
+  it('uses anchor-last-court exclusion for other anchor court values', () => {
+    let players = makeRoster(8)
+    players = withLastCourt(players, 'p1', 0)
+    players = withLastCourt(players, 'p5', 0)
+    players = withLastCourt(players, 'p6', 0)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(true)
+    expect(chosen.has('p5')).toBe(false)
+    expect(chosen.has('p6')).toBe(false)
+  })
+
+  it('falls back to normal League selection when anchor has no last-court data', () => {
+    const players = makeRoster(8)
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    expect(court).not.toBeNull()
+    expect(selectedIds(court).size).toBe(4)
+  })
+
+  it('falls back when not enough players remain after excluding the target court', () => {
+    let players = makeRoster(6)
+    players = withLastCourt(players, 'p1', 0)
+    players = withLastCourt(players, 'p2', 0)
+    players = withLastCourt(players, 'p3', 0)
+    players = withLastCourt(players, 'p4', 0)
+    players = withLastCourt(players, 'p5', 0)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 2,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    expect(court).not.toBeNull()
+    expect(selectedIds(court).size).toBe(4)
+  })
+
+  it('derives last court from matchHistory when excluding remaining players', () => {
+    let players = makeRoster(8)
+    players = withLastCourt(players, 'p1', 3)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 3,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [
+        {
+          courtIndex: 3,
+          teamAIds: ['p2', 'p5'],
+          teamBIds: ['p9', 'p10'],
+          winningTeam: 'A',
+          timestamp: 1,
+        },
+      ],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(true)
+    expect(chosen.has('p2')).toBe(false)
+    expect(chosen.has('p5')).toBe(false)
+  })
+
+  it('includes locked partners when applying the dynamic last-court rule', () => {
+    let players = makeRoster(8).map((player) =>
+      player.id === 'p1'
+        ? { ...player, teammateId: 'p2' }
+        : player.id === 'p2'
+          ? { ...player, teammateId: 'p1' }
+          : player
+    )
+    players = withLastCourt(players, 'p1', 2)
+    players = withLastCourt(players, 'p5', 2)
+    players = withLastCourt(players, 'p6', 2)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(true)
+    expect(chosen.has('p2')).toBe(true)
+    const sameTeam =
+      (court.teamA.some((player) => player.id === 'p1') &&
+        court.teamA.some((player) => player.id === 'p2')) ||
+      (court.teamB.some((player) => player.id === 'p1') &&
+        court.teamB.some((player) => player.id === 'p2'))
     expect(sameTeam).toBe(true)
   })
 })

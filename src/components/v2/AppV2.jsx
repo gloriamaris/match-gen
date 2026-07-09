@@ -25,6 +25,9 @@ import {
   generateRoundRobinCourt,
   applyMatchResult as rrApplyMatchResult,
   revertMatchResult as rrRevertMatchResult,
+  applyLeagueMatchResult,
+  revertLeagueMatchResult,
+  syncLeagueLastMatchFields,
   computeRoundRobinMatchupProgress,
   advanceLeagueFreeze,
   captureLeagueFreeze,
@@ -351,6 +354,27 @@ export default function AppV2() {
   ])
 
   useEffect(() => {
+    if (gameType !== V2_GAME_TYPES.LEAGUE) return
+    if (!Array.isArray(matchHistory) || matchHistory.length === 0) return
+
+    const playedPlayerIds = new Set()
+    matchHistory.forEach((entry) => {
+      ;(entry.teamAIds ?? []).forEach((id) => playedPlayerIds.add(id))
+      ;(entry.teamBIds ?? []).forEach((id) => playedPlayerIds.add(id))
+    })
+
+    if (playedPlayerIds.size === 0) return
+    const needsBackfill = players.some(
+      (player) => playedPlayerIds.has(player.id) && !player.lastMatch
+    )
+    if (!needsBackfill) return
+
+    const syncedPlayers = syncLeagueLastMatchFields(players, matchHistory)
+    setPlayers(syncedPlayers)
+    saveV2Players(syncedPlayers)
+  }, [gameType, numberOfCourts, matchHistory, players])
+
+  useEffect(() => {
     return () => {
       if (startTimeoutRef.current) {
         window.clearTimeout(startTimeoutRef.current)
@@ -565,6 +589,7 @@ export default function AppV2() {
 
       if (isLeague) {
         const freezeUsable =
+          gameMode !== 'doubles' &&
           leagueFreeze &&
           leagueFreeze.numberOfCourts === numberOfCourts &&
           leagueFreeze.gameMode === gameMode &&
@@ -972,6 +997,7 @@ export default function AppV2() {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
     const isRoundRobin = isV2RoundRobinGameType(gameType)
+    const isLeague = gameType === V2_GAME_TYPES.LEAGUE
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     let updatedPlayers
@@ -988,12 +1014,23 @@ export default function AppV2() {
       historyEntry = result.historyEntry
       ejectedWinnerIds = result.ejectedWinnerIds
     } else if (isRoundRobin) {
-      const result = rrApplyMatchResult(players, {
-        courtIndex,
-        teamAIds,
-        teamBIds,
-        winningTeam,
-      })
+      const result = isLeague
+        ? applyLeagueMatchResult(
+            players,
+            {
+              courtIndex,
+              teamAIds,
+              teamBIds,
+              winningTeam,
+            },
+            { numberOfCourts }
+          )
+        : rrApplyMatchResult(players, {
+            courtIndex,
+            teamAIds,
+            teamBIds,
+            winningTeam,
+          })
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else if (isLadderRun) {
@@ -1141,17 +1178,29 @@ export default function AppV2() {
     let currentPlayers = players
     const importedEntries = []
     const isRoundRobin = isV2RoundRobinGameType(gameType)
+    const isLeague = gameType === V2_GAME_TYPES.LEAGUE
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
 
     matches.forEach((match) => {
       const winningTeam = match.scoreA > match.scoreB ? 'A' : 'B'
       const { players: updatedPlayers, historyEntry } = isRoundRobin
-        ? rrApplyMatchResult(currentPlayers, {
-            courtIndex: null,
-            teamAIds: match.teamAIds,
-            teamBIds: match.teamBIds,
-            winningTeam,
-          })
+        ? isLeague
+          ? applyLeagueMatchResult(
+              currentPlayers,
+              {
+                courtIndex: null,
+                teamAIds: match.teamAIds,
+                teamBIds: match.teamBIds,
+                winningTeam,
+              },
+              { numberOfCourts }
+            )
+          : rrApplyMatchResult(currentPlayers, {
+              courtIndex: null,
+              teamAIds: match.teamAIds,
+              teamBIds: match.teamBIds,
+              winningTeam,
+            })
         : isLadderRun
           ? applyLadderRunMatchResult(currentPlayers, {
               courtIndex: null,
@@ -1185,6 +1234,11 @@ export default function AppV2() {
         timestamp: match.timestamp ?? historyEntry.timestamp,
       })
     })
+
+    if (isLeague) {
+      const nextHistory = [...matchHistory, ...importedEntries]
+      currentPlayers = syncLeagueLastMatchFields(currentPlayers, nextHistory)
+    }
 
     setPlayers(currentPlayers)
     saveV2Players(currentPlayers)
@@ -1220,6 +1274,7 @@ export default function AppV2() {
     const winningTeam = scoreA > scoreB ? 'A' : 'B'
     const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
     const isRoundRobin = isV2RoundRobinGameType(gameType)
+    const isLeague = gameType === V2_GAME_TYPES.LEAGUE
     const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
     const useThroneRunEngine =
       isThroneRun &&
@@ -1228,7 +1283,12 @@ export default function AppV2() {
     let updatedPlayers = useThroneRunEngine
       ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
       : isRoundRobin
-        ? rrRevertMatchResult(players, oldMatch)
+        ? isLeague
+          ? revertLeagueMatchResult(players, oldMatch, {
+              numberOfCourts,
+              matchHistory,
+            })
+          : rrRevertMatchResult(players, oldMatch)
         : isLadderRun
           ? revertLadderRunMatchResult(players, oldMatch, { skillAdjustment })
         : revertMatchResult(players, oldMatch, { skillAdjustment })
@@ -1251,12 +1311,23 @@ export default function AppV2() {
       historyEntry = result.historyEntry
       ejectedWinnerIds = result.ejectedWinnerIds
     } else if (isRoundRobin) {
-      const result = rrApplyMatchResult(updatedPlayers, {
-        courtIndex: oldMatch.courtIndex ?? null,
-        teamAIds,
-        teamBIds,
-        winningTeam,
-      })
+      const result = isLeague
+        ? applyLeagueMatchResult(
+            updatedPlayers,
+            {
+              courtIndex: oldMatch.courtIndex ?? null,
+              teamAIds,
+              teamBIds,
+              winningTeam,
+            },
+            { numberOfCourts }
+          )
+        : rrApplyMatchResult(updatedPlayers, {
+            courtIndex: oldMatch.courtIndex ?? null,
+            teamAIds,
+            teamBIds,
+            winningTeam,
+          })
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else if (isLadderRun) {

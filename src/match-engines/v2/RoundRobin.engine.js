@@ -358,7 +358,12 @@ const partitionLeagueFoursome = (four, lockedPartner = new Map()) => {
     )
     .filter((assignment) => isLeagueAssignmentFresh(assignment))
 
-  if (freshAssignments.length === 0) return null
+  if (freshAssignments.length === 0) {
+    if (lockedPairs.length > 0) {
+      return partitionFoursomeWithLocks(four, lockedPartner)
+    }
+    return null
+  }
 
   const best = freshAssignments
     .map((assignment) => ({
@@ -537,6 +542,7 @@ const generateLeagueCourt = (players, options = {}) => {
   const {
     matchHistory = [],
     courts = 2,
+    courtIndex,
     gameMode = 'doubles',
     excludePlayerIds,
   } = options
@@ -569,13 +575,21 @@ const generateLeagueCourt = (players, options = {}) => {
       })
       if (relaxedCourt) return relaxedCourt
     }
-    return null
   }
 
   const cooldownIds = getCooldownIds(matchHistory, courts)
   const lockedPartner = buildLockedPartnerMap(eligible)
   const eligibleById = new Map(eligible.map((player) => [player.id, player]))
   const ranked = rankByFairness(eligible, cooldownIds)
+
+  if (teamSize === 2) {
+    const dynamicCourt = buildLeagueCourtFromDynamicLastCourtRule(
+      ranked,
+      matchHistory,
+      lockedPartner
+    )
+    if (dynamicCourt) return dynamicCourt
+  }
 
   const windowSize = Math.max(needed, Math.min(CANDIDATE_WINDOW, ranked.length))
   const candidateMap = new Map()
@@ -659,6 +673,184 @@ const applyMatchResult = (players, result) => {
   return { players: nextPlayers, historyEntry }
 }
 
+const normalizeMatchTimestamp = (entry, index) => {
+  const timestamp = Number(entry?.timestamp)
+  if (Number.isFinite(timestamp)) return timestamp
+  return Number.MIN_SAFE_INTEGER + index
+}
+
+const derivePlayerLastMatch = (playerId, matchHistory = []) => {
+  if (!playerId || !Array.isArray(matchHistory) || matchHistory.length === 0) {
+    return null
+  }
+
+  const ranked = matchHistory
+    .map((entry, index) => ({
+      entry,
+      index,
+      rank: normalizeMatchTimestamp(entry, index),
+    }))
+    .sort((left, right) => right.rank - left.rank || right.index - left.index)
+
+  for (let i = 0; i < ranked.length; i += 1) {
+    const entry = ranked[i].entry
+    const teamAIds = Array.isArray(entry?.teamAIds) ? entry.teamAIds : []
+    const teamBIds = Array.isArray(entry?.teamBIds) ? entry.teamBIds : []
+    const playedOnTeamA = teamAIds.includes(playerId)
+    const playedOnTeamB = teamBIds.includes(playerId)
+    if (!playedOnTeamA && !playedOnTeamB) continue
+
+    const isWinner =
+      (playedOnTeamA && entry.winningTeam === 'A') ||
+      (playedOnTeamB && entry.winningTeam === 'B')
+
+    return {
+      courtIndex: Number.isInteger(entry.courtIndex) ? entry.courtIndex : null,
+      teamAIds: [...teamAIds],
+      teamBIds: [...teamBIds],
+      result: isWinner ? 'win' : 'loss',
+    }
+  }
+
+  return null
+}
+
+const getPlayerLastCourtIndex = (player, matchHistory = []) => {
+  const storedCourt = player?.lastMatch?.courtIndex
+  if (Number.isInteger(storedCourt)) return storedCourt
+  return derivePlayerLastMatch(player?.id, matchHistory)?.courtIndex ?? null
+}
+
+const addLockedAwarePlayer = (
+  player,
+  selected,
+  selectedIds,
+  rankedById,
+  lockedPartner
+) => {
+  if (!player || selectedIds.has(player.id)) return false
+
+  const partnerId = lockedPartner.get(player.id)
+  if (partnerId) {
+    if (selectedIds.has(partnerId)) return false
+    const partner = rankedById.get(partnerId)
+    if (!partner) return false
+    if (selected.length + 2 > 4) return false
+    selected.push(player, partner)
+    selectedIds.add(player.id)
+    selectedIds.add(partner.id)
+    return true
+  }
+
+  if (selected.length >= 4) return false
+  selected.push(player)
+  selectedIds.add(player.id)
+  return true
+}
+
+const buildLeagueCourtFromDynamicLastCourtRule = (
+  ranked,
+  matchHistory,
+  lockedPartner
+) => {
+  if (ranked.length < 4) return null
+
+  const anchor = ranked[0]
+  const anchorLastCourt = getPlayerLastCourtIndex(anchor, matchHistory)
+  if (!Number.isInteger(anchorLastCourt)) return null
+
+  const rankedById = new Map(ranked.map((player) => [player.id, player]))
+  const selected = []
+  const selectedIds = new Set()
+
+  if (!addLockedAwarePlayer(anchor, selected, selectedIds, rankedById, lockedPartner)) {
+    return null
+  }
+
+  const pool = ranked.filter(
+    (player) =>
+      !selectedIds.has(player.id) &&
+      getPlayerLastCourtIndex(player, matchHistory) !== anchorLastCourt
+  )
+
+  for (const player of pool) {
+    if (selected.length >= 4) break
+    addLockedAwarePlayer(player, selected, selectedIds, rankedById, lockedPartner)
+  }
+
+  if (selected.length !== 4 || !isLockConsistent(selected, lockedPartner)) return null
+
+  return partitionLeagueFoursome(selected, lockedPartner)
+}
+
+const applyLeagueLastMatchToPlayers = (players, result) => {
+  const { courtIndex, teamAIds = [], teamBIds = [], winningTeam } = result ?? {}
+  const teamASet = new Set(teamAIds)
+  const teamBSet = new Set(teamBIds)
+  const matchPlayerIds = new Set([...teamAIds, ...teamBIds])
+
+  return (players ?? []).map((player) => {
+    if (!matchPlayerIds.has(player.id)) return player
+    const isWinner =
+      (teamASet.has(player.id) && winningTeam === 'A') ||
+      (teamBSet.has(player.id) && winningTeam === 'B')
+    return {
+      ...player,
+      lastMatch: {
+        courtIndex: Number.isInteger(courtIndex) ? courtIndex : null,
+        teamAIds: [...teamAIds],
+        teamBIds: [...teamBIds],
+        result: isWinner ? 'win' : 'loss',
+      },
+    }
+  })
+}
+
+const syncLeagueLastMatchFields = (players, matchHistory = []) =>
+  (players ?? []).map((player) => ({
+    ...player,
+    lastMatch: derivePlayerLastMatch(player.id, matchHistory),
+  }))
+
+const removeRevertedMatchFromHistory = (matchHistory = [], result = {}) => {
+  if (!Array.isArray(matchHistory) || matchHistory.length === 0) return []
+
+  if (result?.id) {
+    let removedById = false
+    return matchHistory.filter((entry) => {
+      if (!removedById && entry?.id === result.id) {
+        removedById = true
+        return false
+      }
+      return true
+    })
+  }
+
+  const sameIds = (left = [], right = []) =>
+    left.length === right.length && left.every((id, index) => id === right[index])
+
+  let removed = false
+  return matchHistory.filter((entry) => {
+    if (removed) return true
+    const matches =
+      sameIds(entry?.teamAIds ?? [], result?.teamAIds ?? []) &&
+      sameIds(entry?.teamBIds ?? [], result?.teamBIds ?? []) &&
+      entry?.winningTeam === result?.winningTeam &&
+      (entry?.courtIndex ?? null) === (result?.courtIndex ?? null)
+    if (!matches) return true
+    removed = true
+    return false
+  })
+}
+
+const applyLeagueMatchResult = (players, result, options = {}) => {
+  const base = applyMatchResult(players, result)
+  return {
+    ...base,
+    players: applyLeagueLastMatchToPlayers(base.players, result),
+  }
+}
+
 const revertMatchResult = (players, result) => {
   const { teamAIds, teamBIds, winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
@@ -706,6 +898,14 @@ const revertMatchResult = (players, result) => {
 
     return updated
   })
+}
+
+const revertLeagueMatchResult = (players, result, options = {}) => {
+  const { matchHistory = [] } = options
+  const revertedPlayers = revertMatchResult(players, result)
+
+  const previousHistory = removeRevertedMatchFromHistory(matchHistory, result)
+  return syncLeagueLastMatchFields(revertedPlayers, previousHistory)
 }
 
 // -----------------------------------------------------------------------------
@@ -1167,6 +1367,12 @@ export {
   computeRoundRobinMatchupProgress,
   buildLeagueUpNextPreview,
   generateLeagueCourt,
+  derivePlayerLastMatch,
+  getPlayerLastCourtIndex,
+  applyLeagueLastMatchToPlayers,
+  syncLeagueLastMatchFields,
+  applyLeagueMatchResult,
+  revertLeagueMatchResult,
   captureLeagueFreeze,
   isLeagueFreezeValid,
   materializeLeagueFreezePlayers,

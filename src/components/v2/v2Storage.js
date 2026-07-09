@@ -241,6 +241,31 @@ export function loadV2Players() {
   try {
     const parsed = JSON.parse(stored)
     if (!Array.isArray(parsed)) return []
+    const normalizeLastMatch = (value) => {
+      if (!value || typeof value !== 'object') return null
+      const courtIndex =
+        value.courtIndex == null
+          ? null
+          : Number.isInteger(Number(value.courtIndex))
+            ? Number(value.courtIndex)
+            : null
+      const teamAIds = Array.isArray(value.teamAIds)
+        ? value.teamAIds.filter((id) => typeof id === 'string')
+        : null
+      const teamBIds = Array.isArray(value.teamBIds)
+        ? value.teamBIds.filter((id) => typeof id === 'string')
+        : null
+      const result = value.result === 'win' || value.result === 'loss' ? value.result : null
+      if (!teamAIds || !teamBIds || teamAIds.length !== 2 || teamBIds.length !== 2 || !result) {
+        return null
+      }
+      return {
+        courtIndex,
+        teamAIds,
+        teamBIds,
+        result,
+      }
+    }
     const players = parsed.map((player) => ({
       id:
         typeof player.id === 'string' && player.id.trim()
@@ -279,6 +304,7 @@ export function loadV2Players() {
         player.opponentCounts && typeof player.opponentCounts === 'object'
           ? player.opponentCounts
           : {},
+      lastMatch: normalizeLastMatch(player.lastMatch),
     }))
     return normalizeV2PlayersTeamMetadata(players)
   } catch {
@@ -355,6 +381,7 @@ export function createV2Player({ name, gender, skillLevel }) {
     medalCooldownRemaining: 0,
     partnerCounts: {},
     opponentCounts: {},
+    lastMatch: null,
   }
 }
 

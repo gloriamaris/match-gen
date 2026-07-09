@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Check, ChevronDown, ChevronUp, Pencil, RefreshCw } from 'lucide-react'
 import {
   buildLadderRunUpNextPreview,
+  explainLadderRunUpNextEmpty,
   getLadderRunCooldownIds,
   getPlayerLastResult,
   isLadderRunFreezeValid,
@@ -347,6 +348,28 @@ export default function V2CourtsView({
   const showWinnersLosersSection =
     isLadderRun && (winnerPlayers.length > 0 || loserPlayers.length > 0)
   const showUpNextSection = isCourtsQueueUi || upNextPlayers.length > 0
+  const upNextEmptyMessage = isLadderRun
+    ? explainLadderRunUpNextEmpty(rosterPlayers, {
+        numberOfCourts,
+        gameMode,
+        allowAdjacentSkillMixing,
+        courtMatchups,
+        matchHistory,
+      })
+    : isLeague
+      ? (() => {
+          const onDeckSize = gameMode === 'singles' ? 2 : 4
+          const waiting = checkedInPlayers.filter((player) => !onCourtIds.has(player.id))
+          if (waiting.length === 0) {
+            return 'No checked-in players are waiting — everyone is currently on a court.'
+          }
+          if (waiting.length < onDeckSize) {
+            const courtLabel = gameMode === 'singles' ? 'singles court' : 'doubles court'
+            return `Only ${waiting.length} player${waiting.length === 1 ? '' : 's'} waiting. Need ${onDeckSize} to fill a ${courtLabel}.`
+          }
+          return null
+        })()
+      : null
   const showQueueOverviewSection =
     isCourtsQueueUi ||
     playingPlayers.length > 0 ||
@@ -493,17 +516,18 @@ export default function V2CourtsView({
                     Up Next ({upNextPlayers.length})
                   </h2>
                   {isLadderRun ? (
-                    upNextPlayers.length > 0 ? (
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        Grouped by check-in order, recent win/loss status, and
-                        skill level for the next courts.
-                      </p>
-                    ) : null
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {upNextPlayers.length > 0
+                        ? 'Grouped by check-in order, recent win/loss status, and skill level for the next courts.'
+                        : 'No complete court group is ready yet.'}
+                    </p>
                   ) : isLeague ? (
                     <p className="mt-0.5 text-xs text-slate-500">
-                      {leagueFreezeActive
-                        ? 'Highlighted players are locked in and fill the next court when you generate. New check-ins are added after the queue.'
-                        : 'Checked-in players waiting for the next court, in check-in order. Highlighted players fill the next court when you generate.'}
+                      {upNextPlayers.length > 0
+                        ? leagueFreezeActive
+                          ? 'Highlighted players are locked in and fill the next court when you generate. New check-ins are added after the queue.'
+                          : 'Checked-in players waiting for the next court, in check-in order. Highlighted players fill the next court when you generate.'
+                        : upNextEmptyMessage}
                     </p>
                   ) : (
                     <p className="mt-0.5 text-xs text-slate-500">
@@ -527,49 +551,53 @@ export default function V2CourtsView({
               </button>
               {isUpNextExpanded ? (
                 <div id="up-next-panel" className="p-4 sm:p-5">
-                  <ol className="space-y-1.5">
-                    {upNextPlayers.map((player, index) => {
-                      const isOnDeck = upNextOnDeckIds.has(player.id)
-                      return (
-                        <li
-                          key={player.id}
-                          className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
-                            isOnDeck
-                              ? 'border-amber-300 bg-amber-50 text-amber-900'
-                              : 'border-slate-200 bg-white text-slate-600'
-                          }`}
-                        >
-                          <span
-                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                  {upNextPlayers.length > 0 ? (
+                    <ol className="space-y-1.5">
+                      {upNextPlayers.map((player, index) => {
+                        const isOnDeck = upNextOnDeckIds.has(player.id)
+                        return (
+                          <li
+                            key={player.id}
+                            className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
                               isOnDeck
-                                ? 'bg-amber-200 text-amber-800'
-                                : 'bg-slate-100 text-slate-500'
+                                ? 'border-amber-300 bg-amber-50 text-amber-900'
+                                : 'border-slate-200 bg-white text-slate-600'
                             }`}
                           >
-                            {index + 1}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span>{player.name}</span>
                             <span
-                              className={`ml-1.5 font-normal ${
-                                isOnDeck ? 'text-amber-600' : 'text-slate-400'
+                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                                isOnDeck
+                                  ? 'bg-amber-200 text-amber-800'
+                                  : 'bg-slate-100 text-slate-500'
                               }`}
                             >
-                              {getSkillLabel(player.skillLevel)}{' '}
-                              {SKILL_STARS_BY_LEVEL[getNormalizedSkillLevel(player)]}
+                              {index + 1}
                             </span>
-                          </span>
-                          <span
-                            className={`font-normal ${
-                              isOnDeck ? 'text-amber-500' : 'text-slate-400'
-                            }`}
-                          >
-                            ({Number(player.gamesPlayed) || 0})
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ol>
+                            <span className="min-w-0 flex-1">
+                              <span>{player.name}</span>
+                              <span
+                                className={`ml-1.5 font-normal ${
+                                  isOnDeck ? 'text-amber-600' : 'text-slate-400'
+                                }`}
+                              >
+                                {getSkillLabel(player.skillLevel)}{' '}
+                                {SKILL_STARS_BY_LEVEL[getNormalizedSkillLevel(player)]}
+                              </span>
+                            </span>
+                            <span
+                              className={`font-normal ${
+                                isOnDeck ? 'text-amber-500' : 'text-slate-400'
+                              }`}
+                            >
+                              ({Number(player.gamesPlayed) || 0})
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  ) : upNextEmptyMessage ? (
+                    <p className="text-xs leading-relaxed text-slate-500">{upNextEmptyMessage}</p>
+                  ) : null}
                 </div>
               ) : null}
             </section>
