@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assignDoublesCourtFromBatch,
   applyLadderRunMatchResult,
   advanceLadderRunFreeze,
   buildLadderRunUpNextPreview,
   captureLadderRunFreeze,
   explainLadderRunUpNextEmpty,
   generateLadderRunCourt,
+  generateLadderRunCourtFromPreview,
   getLadderRunCooldownIds,
   isLadderRunFreezeValid,
   materializeFrozenLadderRunCourt,
@@ -516,6 +518,36 @@ describe('buildLadderRunUpNextPreview', () => {
     expect(preview.groups[1].every((player) => player.lastResult === 'loss')).toBe(true)
   })
 
+  it('keeps locked veteran partners together even when their lastResult differs', () => {
+    const players = [
+      makePlayer('w1', {
+        queueOrder: 1,
+        skillLevel: 'Novice',
+        gamesPlayed: 2,
+        lastResult: 'win',
+        teammateId: 'l1',
+      }),
+      makePlayer('l1', {
+        queueOrder: 2,
+        skillLevel: 'Novice',
+        gamesPlayed: 2,
+        lastResult: 'loss',
+        teammateId: 'w1',
+      }),
+      makePlayer('w2', { queueOrder: 3, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('w3', { queueOrder: 4, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l2', { queueOrder: 5, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'loss' }),
+      makePlayer('l3', { queueOrder: 6, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'loss' }),
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+    })
+
+    expect(preview.queue.map((player) => player.id)).toEqual(['w1', 'l1', 'w2', 'w3'])
+  })
+
   it('excludes players on cooldown from Up Next for one match', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       makePlayer(`p${index + 1}`, { skillLevel: 'Novice', queueOrder: index + 1 })
@@ -677,10 +709,9 @@ describe('buildLadderRunUpNextPreview', () => {
       matchHistory,
     })
 
-    // b1's locked partner n1 is on cooldown, so the pair cannot form from the
-    // sitting-out pool. The cooldown top-up brings n1 back and keeps the pair
-    // together (collective skill level = Novice), completing the group.
-    expect(preview.queue.map((player) => player.id)).toEqual(['b1', 'n1', 'n2', 'n3'])
+    // Locked pairs are strict: if a partner is unavailable for this pass, the
+    // other partner is removed from the waiting pool too.
+    expect(preview.queue.map((player) => player.id)).toEqual(['n2', 'n3', 'n4', 'n5'])
   })
 
   it('fills maxSlots with sitting out first then cooldown appended at the bottom', () => {
@@ -1026,6 +1057,34 @@ describe('generateLadderRunCourt', () => {
     expect(teamBIds.includes('a1') && teamBIds.includes('a2')).toBe(false)
   })
 
+  it('excludes both players when a locked partner is on another court', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice', queueOrder: 1, teammateId: 'b' }),
+      makePlayer('b', { skillLevel: 'Novice', queueOrder: 2, teammateId: 'a' }),
+      makePlayer('c', { skillLevel: 'Novice', queueOrder: 3 }),
+      makePlayer('d', { skillLevel: 'Novice', queueOrder: 4 }),
+      makePlayer('e', { skillLevel: 'Novice', queueOrder: 5 }),
+      makePlayer('f', { skillLevel: 'Novice', queueOrder: 6 }),
+    ]
+    const courtMatchups = [
+      {
+        teamA: [players[1], players[2]],
+        teamB: [players[3], players[4]],
+      },
+      null,
+    ]
+
+    const court = generateLadderRunCourt(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      allowAdjacentSkillMixing: false,
+      courtMatchups,
+      courtIndex: 1,
+    })
+
+    expect(court).toBeNull()
+  })
+
   it('forces prior non-locked partners to face each other for veterans', () => {
     const players = [
       makePlayer('a', {
@@ -1060,6 +1119,146 @@ describe('generateLadderRunCourt', () => {
       (teamA.includes('a') && teamA.includes('b')) ||
       (teamB.includes('a') && teamB.includes('b'))
     expect(areTogether).toBe(false)
+  })
+
+  describe('veteran gender shuffle', () => {
+    it('prefers MF vs MF for veterans when available', () => {
+      const batch = [
+        makePlayer('m1', { gender: 'Male', queueOrder: 1, gamesPlayed: 2, lastResult: 'win' }),
+        makePlayer('m2', { gender: 'Male', queueOrder: 2, gamesPlayed: 2, lastResult: 'win' }),
+        makePlayer('f1', { gender: 'Female', queueOrder: 3, gamesPlayed: 2, lastResult: 'win' }),
+        makePlayer('f2', { gender: 'Female', queueOrder: 4, gamesPlayed: 2, lastResult: 'win' }),
+      ]
+
+      const assignment = assignDoublesCourtFromBatch(batch, { preferHistory: true })
+
+      expect(assignment).not.toBeNull()
+      expect(new Set(assignment.teamA.map((player) => player.gender)).size).toBe(2)
+      expect(new Set(assignment.teamB.map((player) => player.gender)).size).toBe(2)
+    })
+
+    it('falls back to MM vs FF when both MF partner combinations were already played', () => {
+      const batch = [
+        makePlayer('m1', {
+          gender: 'Male',
+          queueOrder: 1,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          partnerCounts: { f1: 1, f2: 1 },
+        }),
+        makePlayer('m2', {
+          gender: 'Male',
+          queueOrder: 2,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          partnerCounts: { f1: 1, f2: 1 },
+        }),
+        makePlayer('f1', {
+          gender: 'Female',
+          queueOrder: 3,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          partnerCounts: { m1: 1, m2: 1 },
+        }),
+        makePlayer('f2', {
+          gender: 'Female',
+          queueOrder: 4,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          partnerCounts: { m1: 1, m2: 1 },
+        }),
+      ]
+
+      const assignment = assignDoublesCourtFromBatch(batch, { preferHistory: true })
+
+      expect(assignment).not.toBeNull()
+      expect(new Set(assignment.teamA.map((player) => player.gender)).size).toBe(1)
+      expect(new Set(assignment.teamB.map((player) => player.gender)).size).toBe(1)
+      expect(assignment.teamA[0].gender).not.toBe(assignment.teamB[0].gender)
+    })
+
+    it('falls back to MM vs FF when all MF opponent combinations were already played', () => {
+      const batch = [
+        makePlayer('m1', {
+          gender: 'Male',
+          queueOrder: 1,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          opponentCounts: { m2: 1 },
+        }),
+        makePlayer('m2', {
+          gender: 'Male',
+          queueOrder: 2,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          opponentCounts: { m1: 1 },
+        }),
+        makePlayer('f1', { gender: 'Female', queueOrder: 3, gamesPlayed: 2, lastResult: 'win' }),
+        makePlayer('f2', { gender: 'Female', queueOrder: 4, gamesPlayed: 2, lastResult: 'win' }),
+      ]
+
+      const assignment = assignDoublesCourtFromBatch(batch, { preferHistory: true })
+
+      expect(assignment).not.toBeNull()
+      expect(new Set(assignment.teamA.map((player) => player.gender)).size).toBe(1)
+      expect(new Set(assignment.teamB.map((player) => player.gender)).size).toBe(1)
+      expect(assignment.teamA[0].gender).not.toBe(assignment.teamB[0].gender)
+    })
+
+    it('keeps locked pairs together while applying veteran gender shuffle rules', () => {
+      const batch = [
+        makePlayer('a1', {
+          gender: 'Male',
+          queueOrder: 1,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          teammateId: 'a2',
+        }),
+        makePlayer('a2', {
+          gender: 'Female',
+          queueOrder: 2,
+          gamesPlayed: 2,
+          lastResult: 'win',
+          teammateId: 'a1',
+        }),
+        makePlayer('b1', { gender: 'Male', queueOrder: 3, gamesPlayed: 2, lastResult: 'win' }),
+        makePlayer('b2', { gender: 'Female', queueOrder: 4, gamesPlayed: 2, lastResult: 'win' }),
+      ]
+      const rosterById = new Map(batch.map((player) => [player.id, player]))
+
+      const assignment = assignDoublesCourtFromBatch(batch, { preferHistory: true, rosterById })
+
+      expect(assignment).not.toBeNull()
+      const teamAIds = assignment.teamA.map((player) => player.id)
+      const teamBIds = assignment.teamB.map((player) => player.id)
+      const lockTogether =
+        (teamAIds.includes('a1') && teamAIds.includes('a2')) ||
+        (teamBIds.includes('a1') && teamBIds.includes('a2'))
+      expect(lockTogether).toBe(true)
+    })
+  })
+
+  it('still generates a veteran court when every teammate split repeats a prior pairing', () => {
+    const batch = ['a', 'b', 'c', 'd'].map((id) =>
+      makePlayer(id, {
+        skillLevel: 'Novice',
+        queueOrder: Number(id.charCodeAt(0) - 96),
+        gamesPlayed: 2,
+        lastResult: 'win',
+        partnerCounts: Object.fromEntries(
+          ['a', 'b', 'c', 'd'].filter((otherId) => otherId !== id).map((otherId) => [otherId, 1])
+        ),
+      })
+    )
+
+    const court = generateLadderRunCourtFromPreview(
+      { onDeckPlayers: batch, eligible: batch },
+      { gameMode: 'doubles' }
+    )
+
+    expect(court).not.toBeNull()
+    expect(court.hasRepeatPartners).toBe(true)
+    expect([...court.teamA, ...court.teamB]).toHaveLength(4)
   })
 
   it('can swap in another veteran to improve freshness', () => {
@@ -1107,6 +1306,23 @@ describe('generateLadderRunCourt', () => {
     expect(court).not.toBeNull()
     const assignedIds = [...court.teamA, ...court.teamB].map((player) => player.id)
     expect(assignedIds).toContain('e')
+  })
+
+  it('rejects split locked pair batches during doubles assignment', () => {
+    const roster = [
+      makePlayer('a', { skillLevel: 'Novice', queueOrder: 1, teammateId: 'b' }),
+      makePlayer('b', { skillLevel: 'Novice', queueOrder: 2, teammateId: 'a' }),
+      makePlayer('c', { skillLevel: 'Novice', queueOrder: 3 }),
+      makePlayer('d', { skillLevel: 'Novice', queueOrder: 4 }),
+      makePlayer('e', { skillLevel: 'Novice', queueOrder: 5 }),
+    ]
+    const rosterById = new Map(roster.map((player) => [player.id, player]))
+    const splitBatch = [roster[0], roster[2], roster[3], roster[4]]
+
+    expect(
+      assignDoublesCourtFromBatch(splitBatch, { rosterById })
+    ).toBeNull()
+    expect(assignDoublesCourtFromBatch(splitBatch)).toBeNull()
   })
 
   it('falls back to original on-deck four when no better veteran swap exists', () => {
@@ -1268,6 +1484,31 @@ describe('LadderRun Up Next freeze', () => {
     expect(court.teamB.map((player) => player.id)).toEqual(
       snapshot.onDeckCourt.teamBIds
     )
+  })
+
+  it('rejects frozen on-deck courts that split a locked pair', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice', queueOrder: 1, teammateId: 'b' }),
+      makePlayer('b', { skillLevel: 'Novice', queueOrder: 2, teammateId: 'a' }),
+      makePlayer('c', { skillLevel: 'Novice', queueOrder: 3 }),
+      makePlayer('d', { skillLevel: 'Novice', queueOrder: 4 }),
+    ]
+    const snapshot = {
+      queueIds: ['a', 'b', 'c', 'd'],
+      onDeckCourt: {
+        teamAIds: ['a', 'c'],
+        teamBIds: ['b', 'd'],
+      },
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+    }
+
+    const court = materializeFrozenLadderRunCourt(snapshot, players, {
+      gameMode: 'doubles',
+      courtIndex: 0,
+    })
+
+    expect(court).toBeNull()
   })
 
   it('advances the freeze after a court is generated and appends fresh players last', () => {

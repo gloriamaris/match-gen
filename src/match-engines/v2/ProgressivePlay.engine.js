@@ -178,6 +178,79 @@ const shouldUseCheckInOrder = (players, matchHistory) =>
   (matchHistory ?? []).length === 0 &&
   !hasPartnerOrOpponentHistory(players)
 
+const getMutualLockedTeammate = (player, playersById) => {
+  if (!player?.teammateId) return null
+  const teammate = playersById.get(player.teammateId)
+  if (!teammate || teammate.teammateId !== player.id) return null
+  return teammate
+}
+
+const enforceAvailableMutualLockedPairs = (eligible, rosterById) => {
+  const eligibleIds = new Set(eligible.map((player) => player.id))
+  return eligible.filter((player) => {
+    const teammate = getMutualLockedTeammate(player, rosterById)
+    if (!teammate) return true
+    return eligibleIds.has(teammate.id)
+  })
+}
+
+const buildMutualLockedPairs = (players, rosterById) => {
+  const scope = players ?? []
+  const roster = rosterById ?? new Map(scope.map((player) => [player.id, player]))
+  const inScopeIds = new Set(scope.map((player) => player.id))
+  const pairs = []
+  const seen = new Set()
+
+  scope.forEach((player) => {
+    if (seen.has(player.id) || !inScopeIds.has(player.id)) return
+    const teammate = getMutualLockedTeammate(player, roster)
+    if (!teammate) return
+    seen.add(player.id)
+    seen.add(teammate.id)
+    pairs.push([player.id, teammate.id])
+  })
+
+  return pairs
+}
+
+const isBatchMutualLockConsistent = (batch, rosterById) => {
+  const scope = batch ?? []
+  if (scope.length === 0) return true
+
+  const batchIds = new Set(scope.map((player) => player.id))
+  const roster = rosterById ?? new Map(scope.map((player) => [player.id, player]))
+
+  return scope.every((player) => {
+    if (player?.teammateId && !batchIds.has(player.teammateId)) {
+      return false
+    }
+
+    const teammate = getMutualLockedTeammate(player, roster)
+    if (teammate) {
+      return batchIds.has(teammate.id)
+    }
+
+    return true
+  })
+}
+
+const keepsLockedPairsTogether = (teamA, teamB, lockedPairs) => {
+  const teamAIds = new Set(teamA.map((player) => player.id))
+  const teamBIds = new Set(teamB.map((player) => player.id))
+
+  return lockedPairs.every(([leftId, rightId]) => {
+    const inA = teamAIds.has(leftId) && teamAIds.has(rightId)
+    const inB = teamBIds.has(leftId) && teamBIds.has(rightId)
+    const inBatch =
+      teamAIds.has(leftId) ||
+      teamAIds.has(rightId) ||
+      teamBIds.has(leftId) ||
+      teamBIds.has(rightId)
+    if (!inBatch) return true
+    return inA || inB
+  })
+}
+
 // -----------------------------------------------------------------------------
 // 3. Locked team identification (Steps 1-2)
 // -----------------------------------------------------------------------------
@@ -1334,6 +1407,11 @@ export {
   matchSignature,
   checkInOrderOf,
   sortByCheckInOrder,
+  getMutualLockedTeammate,
+  enforceAvailableMutualLockedPairs,
+  buildMutualLockedPairs,
+  isBatchMutualLockConsistent,
+  keepsLockedPairsTogether,
   allCheckedInHaveZeroGames,
   shouldUseCheckInOrder,
   identifyLockedTeams,

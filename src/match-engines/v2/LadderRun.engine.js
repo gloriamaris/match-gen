@@ -1,11 +1,16 @@
 import {
+  buildMutualLockedPairs,
   canPlayerGroupsOpponents,
   checkInOrderOf,
+  enforceAvailableMutualLockedPairs,
   getCooldownIds,
+  getMutualLockedTeammate,
   hasOpposedBefore,
   hasPartneredBefore,
   highestSkillLevel,
+  isBatchMutualLockConsistent,
   isMixedGender,
+  keepsLockedPairsTogether,
   matchSignature,
   shiftSkillLevel,
   skillBucketOf,
@@ -30,17 +35,9 @@ const hasStatus = (status) => status === 'win' || status === 'loss'
 const normalizePairKey = (aId, bId) =>
   [String(aId), String(bId)].sort().join(':')
 
-const getLockedTeammate = (player, playersById) => {
-  if (!player?.teammateId) return null
-  const teammate = playersById.get(player.teammateId)
-  if (!teammate || teammate.teammateId !== player.id) return null
-  return teammate
-}
-
 const hasIneligibleLockedPartner = (player, allPlayersById, eligibleById) => {
-  if (!player?.teammateId) return false
-  const teammate = allPlayersById.get(player.teammateId)
-  if (!teammate || teammate.teammateId !== player.id) return false
+  const teammate = getMutualLockedTeammate(player, allPlayersById)
+  if (!teammate) return false
   return !eligibleById.has(teammate.id)
 }
 
@@ -97,39 +94,6 @@ export function getPlayerLastResult(player, matchHistory = []) {
   return null
 }
 
-const buildLockedPairs = (players) => {
-  const playersById = new Map(players.map((player) => [player.id, player]))
-  const pairs = []
-  const seen = new Set()
-
-  players.forEach((player) => {
-    const teammate = getLockedTeammate(player, playersById)
-    if (!teammate || seen.has(player.id)) return
-    seen.add(player.id)
-    seen.add(teammate.id)
-    pairs.push([player.id, teammate.id])
-  })
-
-  return pairs
-}
-
-const keepsLockedPairsTogether = (teamA, teamB, lockedPairs) => {
-  const teamAIds = new Set(teamA.map((player) => player.id))
-  const teamBIds = new Set(teamB.map((player) => player.id))
-
-  return lockedPairs.every(([playerAId, playerBId]) => {
-    const inA = teamAIds.has(playerAId) && teamAIds.has(playerBId)
-    const inB = teamBIds.has(playerAId) && teamBIds.has(playerBId)
-    const inBatch =
-      teamAIds.has(playerAId) ||
-      teamAIds.has(playerBId) ||
-      teamBIds.has(playerAId) ||
-      teamBIds.has(playerBId)
-    if (!inBatch) return true
-    return inA || inB
-  })
-}
-
 const addPlayerOrLockedUnit = (
   player,
   group,
@@ -141,7 +105,7 @@ const addPlayerOrLockedUnit = (
   if (assigned.has(player.id)) return false
   if (hasIneligibleLockedPartner(player, allPlayersById, eligibleById)) return false
 
-  const teammate = getLockedTeammate(player, eligibleById)
+  const teammate = getMutualLockedTeammate(player, eligibleById)
   if (teammate) {
     if (assigned.has(teammate.id)) return false
     if (group.length + 2 > groupSize) return false
@@ -245,7 +209,15 @@ function buildGroupForAnchor(
 
   if (requiredStatus) {
     const anchorStatuses = group.map((player) => getPlayerLastResult(player, matchHistory))
-    if (anchorStatuses.some((status) => status !== requiredStatus)) {
+    const anchorHasLockedTeammate = group.some(
+      (player) =>
+        player.id !== anchor.id &&
+        getMutualLockedTeammate(anchor, allPlayersById)?.id === player.id
+    )
+    if (
+      (!anchorHasLockedTeammate && anchorStatuses.some((status) => status !== requiredStatus)) ||
+      (anchorHasLockedTeammate && !anchorStatuses.some((status) => status === requiredStatus))
+    ) {
       return []
     }
   }
@@ -258,11 +230,15 @@ function buildGroupForAnchor(
       if (group.length >= groupSize) break
       if (assigned.has(player.id)) continue
 
-      const teammate = getLockedTeammate(player, eligibleById)
+      const teammate = getMutualLockedTeammate(player, allPlayersById)
       const unitPlayers = teammate ? [player, teammate] : [player]
       if (requiredStatus) {
         const statuses = unitPlayers.map((entry) => getPlayerLastResult(entry, matchHistory))
-        if (statuses.some((status) => status !== requiredStatus)) continue
+        if (teammate) {
+          if (!statuses.some((status) => status === requiredStatus)) continue
+        } else if (statuses.some((status) => status !== requiredStatus)) {
+          continue
+        }
       }
       if (!predicate(unitPlayers)) continue
 
@@ -373,7 +349,11 @@ function appendCooldownTopUp(state, cooldown, sittingOut, options = {}) {
   const { groupSize, maxSlots, assigned, queue, groups } = state
   if (queue.length >= maxSlots || cooldown.length === 0) return
 
-  const combinedEligible = mergePoolsByCheckInOrder(sittingOut, cooldown)
+  const combinedEligibleRaw = mergePoolsByCheckInOrder(sittingOut, cooldown)
+  const combinedEligible =
+    groupSize === PLAYERS_PER_DOUBLES_COURT
+      ? enforceAvailableMutualLockedPairs(combinedEligibleRaw, allPlayersById)
+      : combinedEligibleRaw
   const combinedEligibleById = new Map(
     combinedEligible.map((player) => [player.id, player])
   )
@@ -415,8 +395,16 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
   const allPlayersById = new Map((players ?? []).map((player) => [player.id, player]))
   const phaseOptions = { allowAdjacentSkillMixing, matchHistory, allPlayersById }
 
-  const sittingOut = buildSittingOutPool(players, courtMatchups, matchHistory)
-  const cooldown = buildCooldownPool(players, courtMatchups, matchHistory)
+  const sittingOutRaw = buildSittingOutPool(players, courtMatchups, matchHistory)
+  const cooldownRaw = buildCooldownPool(players, courtMatchups, matchHistory)
+  const sittingOut =
+    groupSize === PLAYERS_PER_DOUBLES_COURT
+      ? enforceAvailableMutualLockedPairs(sittingOutRaw, allPlayersById)
+      : sittingOutRaw
+  const cooldown =
+    groupSize === PLAYERS_PER_DOUBLES_COURT
+      ? enforceAvailableMutualLockedPairs(cooldownRaw, allPlayersById)
+      : cooldownRaw
   const state = createUpNextState(groupSize, maxSlots)
 
   // Tier 1: skill-group from sitting-out players only.
@@ -591,6 +579,42 @@ function buildAssignmentMetrics(assignment, allowAdjacentSkillMixing) {
   }
 }
 
+const normalizeGender = (player) => String(player?.gender ?? '').trim().toLowerCase()
+
+function isSameGenderTeam(team) {
+  if (!Array.isArray(team) || team.length !== 2) return false
+  const left = normalizeGender(team[0])
+  const right = normalizeGender(team[1])
+  return left !== '' && left === right
+}
+
+function isMmVsFfAssignment(assignment) {
+  if (!assignment) return false
+  if (!isSameGenderTeam(assignment.teamA) || !isSameGenderTeam(assignment.teamB)) return false
+  return normalizeGender(assignment.teamA[0]) !== normalizeGender(assignment.teamB[0])
+}
+
+function isMfVsMfAssignment(assignment) {
+  if (!assignment) return false
+  return (
+    isMixedGender(assignment.teamA[0], assignment.teamA[1]) &&
+    isMixedGender(assignment.teamB[0], assignment.teamB[1])
+  )
+}
+
+function batchHasTwoOfEachGender(batch) {
+  const counts = (batch ?? []).reduce(
+    (acc, player) => {
+      const gender = normalizeGender(player)
+      if (gender === 'male') acc.male += 1
+      if (gender === 'female') acc.female += 1
+      return acc
+    },
+    { male: 0, female: 0 }
+  )
+  return counts.male === 2 && counts.female === 2
+}
+
 function compareAssignmentMetrics(left, right, preferHistory) {
   if (preferHistory && left.partnerFreshScore !== right.partnerFreshScore) {
     return left.partnerFreshScore - right.partnerFreshScore
@@ -626,16 +650,28 @@ function isValidVeteranAssignment(assignment, lockedPairKeys) {
   return !invalidTeamPartnering(assignment.teamA) && !invalidTeamPartnering(assignment.teamB)
 }
 
+function isFullyFreshAssignment(assignment, lockedPairKeys) {
+  if (!isValidVeteranAssignment(assignment, lockedPairKeys)) return false
+  return assignment.teamA.every((playerA) =>
+    assignment.teamB.every((playerB) => !hasOpposedBefore(playerA, playerB))
+  )
+}
+
 function scoreDoublesBatch(batch, options = {}) {
-  const { allowAdjacentSkillMixing = false, preferHistory = false } = options
+  const {
+    allowAdjacentSkillMixing = false,
+    preferHistory = false,
+    rosterById = new Map((batch ?? []).map((player) => [player.id, player])),
+  } = options
   if (!Array.isArray(batch) || batch.length < PLAYERS_PER_DOUBLES_COURT) return null
+  if (!isBatchMutualLockConsistent(batch, rosterById)) return null
   if (!isBatchSkillCompatible(batch, allowAdjacentSkillMixing)) return null
 
-  const lockedPairs = buildLockedPairs(batch)
+  const lockedPairs = buildMutualLockedPairs(batch, rosterById)
   const lockedPairKeys = new Set(
     lockedPairs.map(([firstId, secondId]) => normalizePairKey(firstId, secondId))
   )
-  const assignments = enumerateDoublesAssignments(
+  const baseAssignments = enumerateDoublesAssignments(
     batch.slice(0, PLAYERS_PER_DOUBLES_COURT)
   )
     .filter((assignment) => keepsLockedPairsTogether(assignment.teamA, assignment.teamB, lockedPairs))
@@ -646,11 +682,21 @@ function scoreDoublesBatch(batch, options = {}) {
         skillMixingOptions(allowAdjacentSkillMixing)
       )
     )
-    .filter((assignment) =>
-      preferHistory ? isValidVeteranAssignment(assignment, lockedPairKeys) : true
-    )
 
-  if (assignments.length === 0) return null
+  if (baseAssignments.length === 0) return null
+
+  let hasRepeatPartners = false
+  let assignments = baseAssignments
+  if (preferHistory) {
+    const freshAssignments = baseAssignments.filter((assignment) =>
+      isValidVeteranAssignment(assignment, lockedPairKeys)
+    )
+    if (freshAssignments.length > 0) {
+      assignments = freshAssignments
+    } else {
+      hasRepeatPartners = true
+    }
+  }
 
   let bestAssignment = null
   let bestMetrics = null
@@ -669,23 +715,60 @@ function scoreDoublesBatch(batch, options = {}) {
     }
   })
 
+  if (
+    preferHistory &&
+    bestAssignment &&
+    batchHasTwoOfEachGender(batch) &&
+    isMmVsFfAssignment(bestAssignment)
+  ) {
+    const freshMixedAssignments = assignments.filter(
+      (assignment) =>
+        isMfVsMfAssignment(assignment) && isFullyFreshAssignment(assignment, lockedPairKeys)
+    )
+
+    freshMixedAssignments.forEach((assignment) => {
+      const metrics = buildAssignmentMetrics(assignment, allowAdjacentSkillMixing)
+      if (compareAssignmentMetrics(metrics, bestMetrics, preferHistory) > 0) {
+        bestAssignment = assignment
+        bestMetrics = metrics
+      }
+    })
+  }
+
   return {
     assignment: bestAssignment,
     metrics: bestMetrics,
+    hasRepeatPartners,
   }
 }
 
 export function assignDoublesCourtFromBatch(batch, options = {}) {
-  const { allowAdjacentSkillMixing = false, preferHistory = false } = options
-  const scored = scoreDoublesBatch(batch, { allowAdjacentSkillMixing, preferHistory })
+  const {
+    allowAdjacentSkillMixing = false,
+    preferHistory = false,
+    rosterById = new Map((batch ?? []).map((player) => [player.id, player])),
+  } = options
+  const scored = scoreDoublesBatch(batch, { allowAdjacentSkillMixing, preferHistory, rosterById })
   return scored?.assignment ?? null
+}
+
+function ladderRunCourtFromAssignment(assignment, options = {}) {
+  const { courtIndex = 0, hasRepeatPartners = false } = options
+  if (!assignment) return null
+  return {
+    courtIndex,
+    teamA: assignment.teamA,
+    teamB: assignment.teamB,
+    hasRepeatPartners,
+  }
 }
 
 function optimizeVeteranDoublesBatch(
   baselineBatch,
   queue,
   allowAdjacentSkillMixing,
-  matchHistory
+  matchHistory,
+  rosterById = new Map([...baselineBatch, ...queue].map((player) => [player.id, player]))
 ) {
   const baselineStatus = getPlayerLastResult(baselineBatch[0], matchHistory)
   if (!baselineStatus) return baselineBatch
@@ -693,6 +776,7 @@ function optimizeVeteranDoublesBatch(
   const baselineScored = scoreDoublesBatch(baselineBatch, {
     allowAdjacentSkillMixing,
     preferHistory: true,
+    rosterById,
   })
 
   let bestBatch = baselineBatch
@@ -715,13 +799,20 @@ function optimizeVeteranDoublesBatch(
   for (const candidate of candidates) {
     for (let index = 0; index < baselineBatch.length; index += 1) {
       const current = baselineBatch[index]
-      if (current.teammateId || candidate.teammateId) continue
+      if (
+        getMutualLockedTeammate(current, rosterById) ||
+        getMutualLockedTeammate(candidate, rosterById)
+      ) {
+        continue
+      }
 
       const nextBatch = [...baselineBatch]
       nextBatch[index] = candidate
+      if (!isBatchMutualLockConsistent(nextBatch, rosterById)) continue
       const scored = scoreDoublesBatch(nextBatch, {
         allowAdjacentSkillMixing,
         preferHistory: true,
+        rosterById,
       })
       if (!scored) continue
       const isBetter =
@@ -771,6 +862,7 @@ export function generateLadderRunCourtFromPreview(preview, options = {}) {
     allowAdjacentSkillMixing = false,
     matchHistory = [],
     courtIndex = 0,
+    rosterById = new Map((preview?.eligible ?? []).map((player) => [player.id, player])),
   } = options
 
   const eligiblePool = preview?.eligible ?? []
@@ -805,21 +897,21 @@ export function generateLadderRunCourtFromPreview(preview, options = {}) {
         baselineBatch,
         eligiblePool,
         allowAdjacentSkillMixing,
-        matchHistory
+        matchHistory,
+        rosterById
       )
     : baselineBatch
 
-  const assignment = assignDoublesCourtFromBatch(chosenBatch, {
+  const scored = scoreDoublesBatch(chosenBatch, {
     allowAdjacentSkillMixing,
     preferHistory: isVeteranBatch(chosenBatch),
+    rosterById,
   })
-  if (!assignment) return null
 
-  return {
+  return ladderRunCourtFromAssignment(scored?.assignment, {
     courtIndex,
-    teamA: assignment.teamA,
-    teamB: assignment.teamB,
-  }
+    hasRepeatPartners: scored?.hasRepeatPartners ?? false,
+  })
 }
 
 export function generateLadderRunCourt(players, options = {}) {
@@ -839,12 +931,14 @@ export function generateLadderRunCourt(players, options = {}) {
     courtMatchups,
     matchHistory,
   })
+  const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
 
   return generateLadderRunCourtFromPreview(preview, {
     gameMode,
     allowAdjacentSkillMixing,
     matchHistory,
     courtIndex,
+    rosterById,
   })
 }
 
@@ -897,12 +991,14 @@ export function captureLadderRunFreeze(players, options = {}) {
     courtMatchups,
     matchHistory,
   })
+  const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
   const onDeckCourt = courtToTeamIds(
     generateLadderRunCourtFromPreview(preview, {
       gameMode,
       allowAdjacentSkillMixing,
       matchHistory,
       courtIndex: 0,
+      rosterById,
     })
   )
   const queueIds = buildFreezeQueueIds(
@@ -946,6 +1042,7 @@ export function materializeFrozenLadderRunCourt(snapshot, players, options = {})
   if (!snapshot?.queueIds?.length) return null
 
   const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
   const groupSize = groupSizeForMode(gameMode)
 
   if (snapshot.onDeckCourt) {
@@ -955,9 +1052,15 @@ export function materializeFrozenLadderRunCourt(snapshot, players, options = {})
     const teamB = snapshot.onDeckCourt.teamBIds
       .map((id) => byId.get(id))
       .filter(Boolean)
-    if (teamA.length + teamB.length === groupSize) {
+    const frozenBatch = [...teamA, ...teamB]
+    const frozenLockedPairs = buildMutualLockedPairs(frozenBatch, rosterById)
+    const frozenLocksValid =
+      isBatchMutualLockConsistent(frozenBatch, rosterById) &&
+      keepsLockedPairsTogether(teamA, teamB, frozenLockedPairs)
+    if (teamA.length + teamB.length === groupSize && frozenLocksValid) {
       return { courtIndex, teamA, teamB }
     }
+    return null
   }
 
   const topPlayers = snapshot.queueIds
@@ -974,17 +1077,16 @@ export function materializeFrozenLadderRunCourt(snapshot, players, options = {})
     }
   }
 
-  const assignment = assignDoublesCourtFromBatch(topPlayers, {
+  const scored = scoreDoublesBatch(topPlayers, {
     allowAdjacentSkillMixing: options.allowAdjacentSkillMixing ?? false,
     preferHistory: isVeteranBatch(topPlayers),
+    rosterById,
   })
-  if (!assignment) return null
 
-  return {
+  return ladderRunCourtFromAssignment(scored?.assignment, {
     courtIndex,
-    teamA: assignment.teamA,
-    teamB: assignment.teamB,
-  }
+    hasRepeatPartners: scored?.hasRepeatPartners ?? false,
+  })
 }
 
 export function advanceLadderRunFreeze(snapshot, generatedPlayerIds, players, options = {}) {

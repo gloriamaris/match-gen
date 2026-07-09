@@ -24,6 +24,8 @@ import {
   skillGroupOf,
   teamPerformanceScore,
   isMixedGender,
+  buildMutualLockedPairs,
+  isBatchMutualLockConsistent,
 } from '../ProgressivePlay.engine'
 
 // ---------------------------------------------------------------------------
@@ -2661,5 +2663,46 @@ describe('buildUpNextQueue', () => {
       'lateA',
       'lateB',
     ])
+  })
+})
+
+describe('mutual locked pair helpers', () => {
+  it('buildMutualLockedPairs resolves partners outside the scoped players via rosterById', () => {
+    const roster = [
+      makePlayer('a', { teammateId: 'b' }),
+      makePlayer('b', { teammateId: 'a' }),
+      makePlayer('c'),
+      makePlayer('d'),
+    ]
+    const rosterById = new Map(roster.map((player) => [player.id, player]))
+
+    expect(buildMutualLockedPairs([roster[0], roster[2], roster[3]], rosterById)).toEqual([
+      ['a', 'b'],
+    ])
+  })
+
+  it('isBatchMutualLockConsistent rejects split pairs when rosterById includes the absent partner', () => {
+    const roster = [
+      makePlayer('a', { teammateId: 'b' }),
+      makePlayer('b', { teammateId: 'a' }),
+      makePlayer('c'),
+      makePlayer('d'),
+    ]
+    const rosterById = new Map(roster.map((player) => [player.id, player]))
+
+    expect(
+      isBatchMutualLockConsistent([roster[0], roster[2], roster[3]], rosterById)
+    ).toBe(false)
+  })
+
+  it('isBatchMutualLockConsistent rejects split pairs even without rosterById', () => {
+    const batch = [
+      makePlayer('a', { teammateId: 'b' }),
+      makePlayer('c'),
+      makePlayer('d'),
+      makePlayer('e'),
+    ]
+
+    expect(isBatchMutualLockConsistent(batch)).toBe(false)
   })
 })

@@ -21,6 +21,7 @@
 //   applyMatchResult(players, { courtIndex, teamAIds, teamBIds, winningTeam })
 //   revertMatchResult(players, { teamAIds, teamBIds, winningTeam })
 
+import { enforceAvailableMutualLockedPairs } from './ProgressivePlay.engine'
 import { getAllOnCourtPlayerIds } from './progressivePlayCourtRefresh'
 
 // -----------------------------------------------------------------------------
@@ -480,10 +481,14 @@ const generateRoundRobinCourt = (players, options = {}) => {
   const teamSize = teamSizeForMode(gameMode)
   const needed = teamSize * 2
   const excludeIds = new Set(excludePlayerIds ?? [])
+  const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
 
-  const eligible = getRoundRobinActivePlayers(players).filter(
+  let eligible = getRoundRobinActivePlayers(players).filter(
     (player) => !excludeIds.has(player.id)
   )
+  if (teamSize === 2) {
+    eligible = enforceAvailableMutualLockedPairs(eligible, rosterById)
+  }
   if (eligible.length < needed) return null
 
   const units = buildRoundRobinUnits(eligible)
@@ -556,10 +561,14 @@ const generateLeagueCourt = (players, options = {}) => {
   const teamSize = teamSizeForMode(gameMode)
   const needed = teamSize * 2
   const excludeIds = new Set(excludePlayerIds ?? [])
+  const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
 
-  const eligible = getRoundRobinActivePlayers(players).filter(
+  let eligible = getRoundRobinActivePlayers(players).filter(
     (player) => !excludeIds.has(player.id)
   )
+  if (teamSize === 2) {
+    eligible = enforceAvailableMutualLockedPairs(eligible, rosterById)
+  }
   if (eligible.length < needed) return null
 
   const units = buildRoundRobinUnits(eligible)

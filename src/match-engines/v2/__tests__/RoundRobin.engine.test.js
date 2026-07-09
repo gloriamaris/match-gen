@@ -469,6 +469,28 @@ describe('generateRoundRobinCourt — locked pairs (doubles)', () => {
     expect(sameTeam(court, 'a', 'b')).toBe(true)
   })
 
+  it('excludes both players when a locked partner is on another court', () => {
+    const players = [
+      mk('a', { teammateId: 'b' }),
+      mk('b', { teammateId: 'a' }),
+      mk('c'),
+      mk('d'),
+      mk('e'),
+      mk('f'),
+    ]
+    const court = generateRoundRobinCourt(players, {
+      courtIndex: 0,
+      matchHistory: [],
+      courts: 2,
+      gameMode: 'doubles',
+      excludePlayerIds: ['b'],
+    })
+
+    const chosen = [...court.teamA, ...court.teamB].map((p) => p.id)
+    expect(chosen).not.toContain('a')
+    expect(chosen).not.toContain('b')
+  })
+
   it('ignores teammateId in singles (1v1)', () => {
     const players = [
       mk('a', { teammateId: 'b' }),
@@ -1209,6 +1231,29 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
 
     expect(court).not.toBeNull()
     expect(selectedIds(court).size).toBe(4)
+  })
+
+  it('excludes both players when a locked partner is already assigned to another court', () => {
+    const players = makeRoster(20).map((player) =>
+      player.id === 'p1'
+        ? { ...player, teammateId: 'p2' }
+        : player.id === 'p2'
+          ? { ...player, teammateId: 'p1' }
+          : player
+    )
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+      excludePlayerIds: ['p2'],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p1')).toBe(false)
+    expect(chosen.has('p2')).toBe(false)
   })
 })
 
