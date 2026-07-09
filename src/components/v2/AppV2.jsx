@@ -589,7 +589,6 @@ export default function AppV2() {
 
       if (isLeague) {
         const freezeUsable =
-          gameMode !== 'doubles' &&
           leagueFreeze &&
           leagueFreeze.numberOfCourts === numberOfCourts &&
           leagueFreeze.gameMode === gameMode &&
