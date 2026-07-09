@@ -28,6 +28,8 @@ import { getAllOnCourtPlayerIds } from './progressivePlayCourtRefresh'
 // -----------------------------------------------------------------------------
 
 const CANDIDATE_WINDOW = 10
+const leagueLargeRosterThreshold = (courts, gameMode = 'doubles') =>
+  Math.max(courts, 1) * (gameMode === 'singles' ? 2 : 4)
 
 const shuffle = (items) => {
   const list = [...items]
@@ -581,8 +583,12 @@ const generateLeagueCourt = (players, options = {}) => {
   const lockedPartner = buildLockedPartnerMap(eligible)
   const eligibleById = new Map(eligible.map((player) => [player.id, player]))
   const ranked = rankByFairness(eligible, cooldownIds)
+  const checkedInCount = getRoundRobinActivePlayers(players).length
+  const useDynamicLastCourtRule =
+    teamSize === 2 &&
+    checkedInCount > leagueLargeRosterThreshold(courts, gameMode)
 
-  if (teamSize === 2) {
+  if (useDynamicLastCourtRule) {
     const dynamicCourt = buildLeagueCourtFromDynamicLastCourtRule(
       ranked,
       matchHistory,
@@ -772,6 +778,26 @@ const buildLeagueCourtFromDynamicLastCourtRule = (
       !selectedIds.has(player.id) &&
       getPlayerLastCourtIndex(player, matchHistory) !== anchorLastCourt
   )
+  const slotsRemaining = 4 - selected.length
+  let fillableSlots = 0
+  const simulatedSelectedIds = new Set(selectedIds)
+  for (const player of pool) {
+    if (simulatedSelectedIds.has(player.id)) continue
+    const partnerId = lockedPartner.get(player.id)
+    if (partnerId) {
+      if (simulatedSelectedIds.has(partnerId)) continue
+      const partner = rankedById.get(partnerId)
+      if (!partner || fillableSlots + 2 > slotsRemaining) continue
+      simulatedSelectedIds.add(player.id)
+      simulatedSelectedIds.add(partner.id)
+      fillableSlots += 2
+    } else {
+      simulatedSelectedIds.add(player.id)
+      fillableSlots += 1
+    }
+    if (fillableSlots >= slotsRemaining) break
+  }
+  if (fillableSlots < slotsRemaining) return null
 
   for (const player of pool) {
     if (selected.length >= 4) break

@@ -1004,7 +1004,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
     )
 
   it('uses queue head as anchor and excludes others who last played the same court', () => {
-    let players = makeRoster(8)
+    let players = makeRoster(20)
     players = withLastCourt(players, 'p1', 2)
     players = withLastCourt(players, 'p5', 2)
     players = withLastCourt(players, 'p6', 2)
@@ -1024,7 +1024,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
   })
 
   it('applies anchor-last-court exclusion even when generating a different court index', () => {
-    let players = makeRoster(8)
+    let players = makeRoster(20)
     players = withLastCourt(players, 'p1', 1)
     players = withLastCourt(players, 'p5', 1)
     players = withLastCourt(players, 'p6', 1)
@@ -1044,7 +1044,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
   })
 
   it('uses anchor-last-court exclusion for other anchor court values', () => {
-    let players = makeRoster(8)
+    let players = makeRoster(20)
     players = withLastCourt(players, 'p1', 0)
     players = withLastCourt(players, 'p5', 0)
     players = withLastCourt(players, 'p6', 0)
@@ -1098,7 +1098,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
   })
 
   it('derives last court from matchHistory when excluding remaining players', () => {
-    let players = makeRoster(8)
+    let players = makeRoster(20)
     players = withLastCourt(players, 'p1', 3)
 
     const court = generateLeagueCourt(players, {
@@ -1124,7 +1124,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
   })
 
   it('includes locked partners when applying the dynamic last-court rule', () => {
-    let players = makeRoster(8).map((player) =>
+    let players = makeRoster(20).map((player) =>
       player.id === 'p1'
         ? { ...player, teammateId: 'p2' }
         : player.id === 'p2'
@@ -1152,6 +1152,63 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
       (court.teamB.some((player) => player.id === 'p1') &&
         court.teamB.some((player) => player.id === 'p2'))
     expect(sameTeam).toBe(true)
+  })
+
+  it('does not apply dynamic rule when checked-in is not above courts times players-per-court', () => {
+    let players = makeRoster(8)
+    players = withLastCourt(players, 'p1', 2)
+    players = withLastCourt(players, 'p2', 2)
+    players = withLastCourt(players, 'p3', 2)
+    players = withLastCourt(players, 'p4', 2)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 2,
+      courts: 2,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const chosen = selectedIds(court)
+    expect(chosen.has('p2')).toBe(true)
+    expect(chosen.has('p3')).toBe(true)
+    expect(chosen.has('p4')).toBe(true)
+  })
+
+  it('falls back to normal League generation when large-roster filter leaves too few players', () => {
+    let players = makeRoster(20)
+    players = withLastCourt(players, 'p1', 0)
+    players = withLastCourt(players, 'p2', 0)
+    players = withLastCourt(players, 'p3', 0)
+    players = withLastCourt(players, 'p4', 0)
+    players = withLastCourt(players, 'p5', 0)
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 4,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+      excludePlayerIds: [
+        'p7',
+        'p8',
+        'p9',
+        'p10',
+        'p11',
+        'p12',
+        'p13',
+        'p14',
+        'p15',
+        'p16',
+        'p17',
+        'p18',
+        'p19',
+        'p20',
+      ],
+    })
+
+    expect(court).not.toBeNull()
+    expect(selectedIds(court).size).toBe(4)
   })
 })
 
