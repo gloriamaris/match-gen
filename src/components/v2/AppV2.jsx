@@ -21,7 +21,6 @@ import {
   selectPrimaryThroneWinner,
 } from '../../match-engines/v2/ThroneRun.engine'
 import {
-  generateLeagueCourt,
   generateRoundRobinCourt,
   applyMatchResult as rrApplyMatchResult,
   revertMatchResult as rrRevertMatchResult,
@@ -30,9 +29,10 @@ import {
   syncLeagueLastMatchFields,
   computeRoundRobinMatchupProgress,
   advanceLeagueFreeze,
+  buildLeagueDisplayedUpNext,
   captureLeagueFreeze,
   isLeagueFreezeValid,
-  materializeFrozenLeagueCourt,
+  materializeLeagueCourtFromQueueHead,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
   applyLadderRunMatchResult,
@@ -593,46 +593,17 @@ export default function AppV2() {
       const isLeague = gameType === V2_GAME_TYPES.LEAGUE
 
       if (isLeague) {
-        const freezeUsable =
-          leagueFreeze &&
-          leagueFreeze.numberOfCourts === numberOfCourts &&
-          leagueFreeze.gameMode === gameMode &&
-          isLeagueFreezeValid(leagueFreeze, currentPlayers, courtMatchups ?? [], {
-            numberOfCourts,
-            gameMode,
-          })
-
-        if (freezeUsable) {
-          generatedCourt = materializeFrozenLeagueCourt(
-            leagueFreeze,
-            currentPlayers,
-            {
-              gameMode,
-              courtIndex,
-            }
-          )
-        }
-
-        if (!generatedCourt) {
-          generatedCourt =
-            gameMode === 'doubles'
-              ? generateLeagueCourt(effectivePlayers, {
-                  courtIndex,
-                  courtMatchups: courtMatchups ?? [],
-                  matchHistory,
-                  courts: numberOfCourts,
-                  gameMode,
-                  excludePlayerIds: otherCourtPlayerIds,
-                })
-              : generateRoundRobinCourt(effectivePlayers, {
-                  courtIndex,
-                  courtMatchups: courtMatchups ?? [],
-                  matchHistory,
-                  courts: numberOfCourts,
-                  gameMode,
-                  excludePlayerIds: otherCourtPlayerIds,
-                })
-        }
+        const { queue } = buildLeagueDisplayedUpNext(currentPlayers, leagueFreeze, {
+          courtMatchups: courtMatchups ?? [],
+          numberOfCourts,
+          gameMode,
+          matchHistory,
+        })
+        const refreshQueue = queue.filter((player) => !otherCourtIdSet.has(player.id))
+        generatedCourt = materializeLeagueCourtFromQueueHead(refreshQueue, {
+          gameMode,
+          courtIndex,
+        })
       } else if (isRoundRobin) {
         generatedCourt = generateRoundRobinCourt(effectivePlayers, {
           courtIndex,

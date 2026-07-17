@@ -16,7 +16,10 @@ import {
   isProgressivePlayFreezeValid,
   mergeFrozenUpNextDisplay,
 } from '../../match-engines/v2/progressivePlayCourtRefresh'
-import { computeRoundRobinMatchupProgress, buildLeagueUpNextPreview, isLeagueFreezeValid, leagueOnDeckSize } from '../../match-engines/v2/RoundRobin.engine'
+import {
+  buildLeagueDisplayedUpNext,
+  computeRoundRobinMatchupProgress,
+} from '../../match-engines/v2/RoundRobin.engine'
 import {
   isV2CourtsQueueUiGameType,
   isV2RoundRobinGameType,
@@ -227,8 +230,8 @@ export default function V2CourtsView({
       })
     : null
 
-  const leaguePreview = isLeague
-    ? buildLeagueUpNextPreview(rosterPlayers, {
+  const leagueDisplay = isLeague
+    ? buildLeagueDisplayedUpNext(rosterPlayers, leagueFreeze, {
         numberOfCourts,
         gameMode,
         courtMatchups,
@@ -247,17 +250,10 @@ export default function V2CourtsView({
       numberOfCourts,
       gameMode,
     })
-  const leagueFreezeActive =
-    isLeague &&
-    isLeagueFreezeValid(leagueFreeze, rosterPlayers, courtMatchups, {
-      numberOfCourts,
-      gameMode,
-    })
+  const leagueFreezeActive = isLeague && Boolean(leagueDisplay?.freezeActive)
   const ladderRunMaxSlots =
     Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
   const progressiveMaxSlots = Math.max(numberOfCourts, 1) * 4
-  const leagueMaxSlots =
-    Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
   const upNextPlayers = isLadderRun
     ? ladderRunFreezeActive
       ? mergeFrozenUpNextDisplay(
@@ -268,14 +264,7 @@ export default function V2CourtsView({
         )
       : (ladderRunPreview?.queue ?? [])
     : isLeague
-      ? leagueFreezeActive
-        ? mergeFrozenUpNextDisplay(
-            leagueFreeze,
-            leaguePreview,
-            rosterPlayers,
-            leagueMaxSlots
-          )
-        : (leaguePreview?.queue ?? [])
+      ? (leagueDisplay?.queue ?? [])
       : progressiveFreezeActive
         ? mergeFrozenUpNextDisplay(
             progressivePlayFreeze,
@@ -315,9 +304,7 @@ export default function V2CourtsView({
           return previewOnDeckIds.filter((id) => displayedIds.has(id)).slice(0, onDeckSize)
         })()
       : isLeague
-        ? leagueFreezeActive
-          ? leagueFreeze.queueIds.slice(0, leagueOnDeckSize(gameMode))
-          : (leaguePreview?.onDeckPlayers ?? []).map((player) => player.id)
+        ? (leagueDisplay?.onDeckPlayers ?? []).map((player) => player.id)
         : progressiveFreezeActive
           ? progressivePlayFreeze.queueIds.slice(0, 4)
           : (upNextPreview?.onDeckPlayers ?? []).map((player) => player.id)

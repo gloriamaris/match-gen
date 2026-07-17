@@ -22,7 +22,10 @@
 //   revertMatchResult(players, { teamAIds, teamBIds, winningTeam })
 
 import { enforceAvailableMutualLockedPairs } from './ProgressivePlay.engine'
-import { getAllOnCourtPlayerIds } from './progressivePlayCourtRefresh'
+import {
+  getAllOnCourtPlayerIds,
+  mergeFrozenUpNextDisplay,
+} from './progressivePlayCourtRefresh'
 
 // -----------------------------------------------------------------------------
 // 1. Helpers
@@ -339,11 +342,11 @@ const scoreLeagueAssignment = (assignment) => {
 }
 
 const compareLeagueAssignmentScore = (left, right) => {
-  if (left.skillMixedCount !== right.skillMixedCount) {
-    return right.skillMixedCount - left.skillMixedCount
-  }
   if (left.genderMixedCount !== right.genderMixedCount) {
     return right.genderMixedCount - left.genderMixedCount
+  }
+  if (left.skillMixedCount !== right.skillMixedCount) {
+    return right.skillMixedCount - left.skillMixedCount
   }
   if (left.partnerRepeatScore !== right.partnerRepeatScore) {
     return left.partnerRepeatScore - right.partnerRepeatScore
@@ -1172,8 +1175,6 @@ const buildLeagueUpNextPreview = (
     (p) => !onCourtIds.has(p.id) && cooldownIds.has(p.id)
   )
 
-  const maxSlots =
-    Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
   const onDeckSize = gameMode === 'singles' ? 2 : 4
 
   const allHaveZeroGames = checkedIn.every((p) => gamesPlayedOf(p) === 0)
@@ -1191,10 +1192,65 @@ const buildLeagueUpNextPreview = (
   const orderedCooldown = orderPool(cooldown, new Set())
   const ordered = [...orderedSittingOut, ...orderedCooldown]
 
-  const queue = ordered.slice(0, maxSlots)
+  const queue = ordered
   const onDeckPlayers = queue.slice(0, onDeckSize)
 
   return { queue, onDeckPlayers }
+}
+
+const materializeLeagueCourtFromQueueHead = (
+  orderedPlayers,
+  { gameMode = 'doubles', courtIndex = 0 } = {}
+) => {
+  const playersPerCourt = leaguePlayersPerCourt(gameMode)
+  const topPlayers = (orderedPlayers ?? []).slice(0, playersPerCourt)
+  if (topPlayers.length < playersPerCourt) return null
+
+  if (gameMode === 'singles') {
+    return {
+      courtIndex,
+      teamA: [topPlayers[0]],
+      teamB: [topPlayers[1]],
+    }
+  }
+
+  const lockedPartner = buildLockedPartnerMap(topPlayers)
+  const partition =
+    partitionLeagueFoursome(topPlayers, lockedPartner) ??
+    partitionFoursomeWithLocks(topPlayers, lockedPartner)
+  if (!partition) return null
+  return {
+    courtIndex,
+    teamA: partition.teamA,
+    teamB: partition.teamB,
+  }
+}
+
+const buildLeagueDisplayedUpNext = (
+  players,
+  freezeSnapshot,
+  {
+    numberOfCourts = 1,
+    gameMode = 'doubles',
+    courtMatchups = [],
+    matchHistory = [],
+  } = {}
+) => {
+  const preview = buildLeagueUpNextPreview(players, {
+    numberOfCourts,
+    gameMode,
+    courtMatchups,
+    matchHistory,
+  })
+  const freezeActive = isLeagueFreezeValid(freezeSnapshot, players, courtMatchups, {
+    numberOfCourts,
+    gameMode,
+  })
+  const queue = freezeActive
+    ? mergeFrozenUpNextDisplay(freezeSnapshot, preview, players)
+    : (preview.queue ?? [])
+  const onDeckPlayers = queue.slice(0, leagueOnDeckSize(gameMode))
+  return { queue, onDeckPlayers, preview, freezeActive }
 }
 
 // -----------------------------------------------------------------------------
@@ -1253,12 +1309,9 @@ function captureLeagueFreeze(players, options = {}) {
     matchHistory,
   })
   const onDeckCourt = courtToTeamIds(
-    generateLeagueCourt(players, {
-      courtMatchups,
-      matchHistory,
-      courts: numberOfCourts,
+    materializeLeagueCourtFromQueueHead(preview.queue, {
       gameMode,
-      excludePlayerIds: getAllOnCourtPlayerIds(courtMatchups),
+      courtIndex: 0,
     })
   )
   const queueIds = buildFreezeQueueIds(
@@ -1320,25 +1373,7 @@ function materializeFrozenLeagueCourt(snapshot, players, options = {}) {
     .slice(0, playersPerCourt)
     .map((id) => byId.get(id))
     .filter(Boolean)
-  if (topPlayers.length < playersPerCourt) return null
-
-  if (gameMode === 'singles') {
-    return {
-      courtIndex,
-      teamA: [topPlayers[0]],
-      teamB: [topPlayers[1]],
-    }
-  }
-
-  const lockedPartner = buildLockedPartnerMap(topPlayers)
-  const partition =
-    partitionLeagueFoursome(topPlayers, lockedPartner) ??
-    partitionFoursomeWithLocks(topPlayers, lockedPartner)
-  return {
-    courtIndex,
-    teamA: partition.teamA,
-    teamB: partition.teamB,
-  }
+  return materializeLeagueCourtFromQueueHead(topPlayers, { gameMode, courtIndex })
 }
 
 function advanceLeagueFreeze(snapshot, generatedPlayerIds, players, options = {}) {
@@ -1401,7 +1436,9 @@ export {
   matchSignature,
   computeRoundRobinMatchupProgress,
   buildLeagueUpNextPreview,
+  buildLeagueDisplayedUpNext,
   generateLeagueCourt,
+  materializeLeagueCourtFromQueueHead,
   derivePlayerLastMatch,
   getPlayerLastCourtIndex,
   applyLeagueLastMatchToPlayers,

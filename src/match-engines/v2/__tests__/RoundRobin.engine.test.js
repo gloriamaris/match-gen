@@ -10,13 +10,13 @@ import {
   derivePlayerLastMatch,
   metCount,
   computeRoundRobinMatchupProgress,
+  buildLeagueDisplayedUpNext,
   buildLeagueUpNextPreview,
   captureLeagueFreeze,
   isLeagueFreezeValid,
+  materializeLeagueCourtFromQueueHead,
   advanceLeagueFreeze,
 } from '../RoundRobin.engine'
-import { mergeFrozenUpNextDisplay } from '../progressivePlayCourtRefresh'
-
 const mk = (id, overrides = {}) => ({
   id,
   name: id,
@@ -837,7 +837,7 @@ describe('generateLeagueCourt — doubles priorities', () => {
     expect(isFreshCourt(players, court)).toBe(true)
   })
 
-  it('prefers mixed-gender teams when skill preference is tied', () => {
+  it('prefers mixed-gender teams when skill scores tie', () => {
     const players = [
       mk('a', { skillLevel: 'Beginner', gender: 'Male' }),
       mk('b', { skillLevel: 'Advanced', gender: 'Male' }),
@@ -858,6 +858,88 @@ describe('generateLeagueCourt — doubles priorities', () => {
     expect(teamAGenders.size).toBe(2)
     expect(teamBGenders.size).toBe(2)
     expect(isFreshCourt(players, court)).toBe(true)
+  })
+
+  it('prefers mixed-gender teams before mixed-skill when priorities conflict', () => {
+    const players = [
+      mk('a', {
+        skillLevel: 'Beginner',
+        gender: 'Male',
+        partnerCounts: { d: 1 },
+      }),
+      mk('b', {
+        skillLevel: 'Advanced',
+        gender: 'Male',
+        partnerCounts: { c: 1 },
+      }),
+      mk('c', {
+        skillLevel: 'Beginner',
+        gender: 'Female',
+        partnerCounts: { b: 1 },
+      }),
+      mk('d', {
+        skillLevel: 'Advanced',
+        gender: 'Female',
+        partnerCounts: { a: 1 },
+      }),
+    ]
+
+    const court = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      courtMatchups: [],
+    })
+
+    const teamAGenders = new Set(court.teamA.map((player) => player.gender))
+    const teamBGenders = new Set(court.teamB.map((player) => player.gender))
+    const teamASkills = new Set(court.teamA.map((player) => player.skillLevel))
+    const teamBSkills = new Set(court.teamB.map((player) => player.skillLevel))
+
+    expect(teamAGenders.size).toBe(2)
+    expect(teamBGenders.size).toBe(2)
+    expect(teamASkills.size).toBe(1)
+    expect(teamBSkills.size).toBe(1)
+  })
+
+  it('applies the same mixed-gender-first priority in queue-head materialization', () => {
+    const queue = [
+      mk('a', {
+        skillLevel: 'Beginner',
+        gender: 'Male',
+        partnerCounts: { d: 1 },
+      }),
+      mk('b', {
+        skillLevel: 'Advanced',
+        gender: 'Male',
+        partnerCounts: { c: 1 },
+      }),
+      mk('c', {
+        skillLevel: 'Beginner',
+        gender: 'Female',
+        partnerCounts: { b: 1 },
+      }),
+      mk('d', {
+        skillLevel: 'Advanced',
+        gender: 'Female',
+        partnerCounts: { a: 1 },
+      }),
+    ]
+
+    const court = materializeLeagueCourtFromQueueHead(queue, {
+      gameMode: 'doubles',
+      courtIndex: 0,
+    })
+    const teamAGenders = new Set(court.teamA.map((player) => player.gender))
+    const teamBGenders = new Set(court.teamB.map((player) => player.gender))
+    const teamASkills = new Set(court.teamA.map((player) => player.skillLevel))
+    const teamBSkills = new Set(court.teamB.map((player) => player.skillLevel))
+
+    expect(teamAGenders.size).toBe(2)
+    expect(teamBGenders.size).toBe(2)
+    expect(teamASkills.size).toBe(1)
+    expect(teamBSkills.size).toBe(1)
   })
 
   it('falls back to original pairing when no fresh combinations exist', () => {
@@ -1258,7 +1340,7 @@ describe('generateLeagueCourt — dynamic last-court rule', () => {
 })
 
 describe('buildLeagueUpNextPreview', () => {
-  it('limits doubles Up Next to courts * 4 in check-in order when all games are 0', () => {
+  it('keeps doubles Up Next in check-in order when all games are 0', () => {
     const players = [
       mk('d', { queueOrder: 4 }),
       mk('a', { queueOrder: 1 }),
@@ -1287,11 +1369,12 @@ describe('buildLeagueUpNextPreview', () => {
       'f',
       'g',
       'h',
+      'i',
     ])
     expect(onDeckPlayers.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('limits singles Up Next to courts * 2 in check-in order when all games are 0', () => {
+  it('keeps singles Up Next in check-in order when all games are 0', () => {
     const players = [
       mk('c', { queueOrder: 3 }),
       mk('a', { queueOrder: 1 }),
@@ -1392,7 +1475,7 @@ describe('buildLeagueUpNextPreview', () => {
     expect(queue.map((player) => player.id)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('reaches courts * groupSize by topping up from cooldown at the bottom', () => {
+  it('tops up from cooldown at the bottom after sitting-out players', () => {
     const players = [
       mk('a', { queueOrder: 1 }),
       mk('b', { queueOrder: 2 }),
@@ -1427,11 +1510,43 @@ describe('buildLeagueUpNextPreview', () => {
       'd',
       'e',
       'f',
+      'g',
     ])
   })
 })
 
 describe('League Up Next freeze', () => {
+  it('materializes league court from the queue head in doubles and singles', () => {
+    const doublesQueue = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4 }),
+      mk('e', { queueOrder: 5 }),
+    ]
+    const doublesCourt = materializeLeagueCourtFromQueueHead(doublesQueue, {
+      gameMode: 'doubles',
+      courtIndex: 2,
+    })
+    const doublesIds = new Set([
+      ...doublesCourt.teamA.map((player) => player.id),
+      ...doublesCourt.teamB.map((player) => player.id),
+    ])
+    expect(doublesIds).toEqual(new Set(['a', 'b', 'c', 'd']))
+    expect(doublesCourt.courtIndex).toBe(2)
+
+    const singlesQueue = [mk('x', { queueOrder: 1 }), mk('y', { queueOrder: 2 }), mk('z')]
+    const singlesCourt = materializeLeagueCourtFromQueueHead(singlesQueue, {
+      gameMode: 'singles',
+      courtIndex: 1,
+    })
+    expect(singlesCourt).toEqual({
+      courtIndex: 1,
+      teamA: [singlesQueue[0]],
+      teamB: [singlesQueue[1]],
+    })
+  })
+
   it('captures a frozen queue block sized to courts * players per court', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
@@ -1448,10 +1563,19 @@ describe('League Up Next freeze', () => {
     expect(snapshot.queueIds).toHaveLength(8)
     expect(snapshot.numberOfCourts).toBe(2)
     expect(snapshot.gameMode).toBe('doubles')
+    const preview = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    expect(snapshot.queueIds.slice(0, 4)).toEqual(
+      preview.queue.slice(0, 4).map((player) => player.id)
+    )
   })
 
   it('appends newly checked-in players after the frozen queue in display order', () => {
-    const players = Array.from({ length: 4 }, (_, index) =>
+    const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
     )
     const snapshot = captureLeagueFreeze(players, {
@@ -1460,26 +1584,51 @@ describe('League Up Next freeze', () => {
       courtMatchups: [],
       matchHistory: [],
     })
-    const expandedPlayers = [...players, mk('p5', { queueOrder: 5 })]
-    const livePreview = buildLeagueUpNextPreview(expandedPlayers, {
+    const expandedPlayers = [...players, mk('p9', { queueOrder: 9 })]
+    const { queue: merged } = buildLeagueDisplayedUpNext(expandedPlayers, snapshot, {
       numberOfCourts: 2,
       gameMode: 'doubles',
       courtMatchups: [],
       matchHistory: [],
     })
 
-    const merged = mergeFrozenUpNextDisplay(
-      snapshot,
-      livePreview,
-      expandedPlayers,
-      8
+    expect(merged.map((player) => player.id).slice(0, 8)).toEqual(
+      snapshot.queueIds.slice(0, 8)
+    )
+    expect(merged.map((player) => player.id)).toContain('p9')
+    expect(merged.map((player) => player.id).indexOf('p9')).toBe(8)
+  })
+
+  it('refresh parity uses the displayed queue head for on-deck court', () => {
+    const players = Array.from({ length: 10 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+    const snapshot = captureLeagueFreeze(players.slice(0, 8), {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const displayed = buildLeagueDisplayedUpNext(players, snapshot, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    const generated = materializeLeagueCourtFromQueueHead(displayed.queue, {
+      gameMode: 'doubles',
+      courtIndex: 0,
+    })
+    const generatedIds = new Set([
+      ...generated.teamA.map((player) => player.id),
+      ...generated.teamB.map((player) => player.id),
+    ])
+    const highlightedIds = new Set(
+      displayed.onDeckPlayers.slice(0, 4).map((player) => player.id)
     )
 
-    expect(merged.map((player) => player.id).slice(0, 4)).toEqual(
-      snapshot.queueIds.slice(0, 4)
-    )
-    expect(merged.map((player) => player.id)).toContain('p5')
-    expect(merged.map((player) => player.id).indexOf('p5')).toBe(4)
+    expect(generatedIds).toEqual(highlightedIds)
   })
 
   it('invalidates freeze when a queued player checks out', () => {
