@@ -425,6 +425,119 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
   return best
 }
 
+const selectLeagueDoublesFoursome = (eligible, { cooldownIds, lockedPartner }) => {
+  const needed = 4
+  if (!Array.isArray(eligible) || eligible.length < needed) return null
+
+  const eligibleById = new Map(eligible.map((player) => [player.id, player]))
+  const ranked = rankByFairness(eligible, cooldownIds)
+  const windowSize = Math.max(needed, Math.min(CANDIDATE_WINDOW, ranked.length))
+  const candidateMap = new Map()
+
+  for (let i = 0; i < ranked.length && candidateMap.size < windowSize; i += 1) {
+    const player = ranked[i]
+    candidateMap.set(player.id, player)
+    const partnerId = lockedPartner.get(player.id)
+    if (partnerId && eligibleById.has(partnerId)) {
+      candidateMap.set(partnerId, eligibleById.get(partnerId))
+    }
+  }
+
+  const candidates = [...candidateMap.values()]
+  const leagueCourt = buildLeagueFoursomeWithReplacement(
+    candidates,
+    cooldownIds,
+    lockedPartner
+  )
+  if (leagueCourt) return leagueCourt
+
+  const fallbackGroup = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
+  if (!fallbackGroup) return null
+  return partitionFoursomeWithLocks(fallbackGroup, lockedPartner)
+}
+
+const orderPoolAsLockedUnits = (pool, cooldownSet, allHaveZeroGames, lockedPartner) => {
+  if (pool.length === 0) return []
+
+  const poolIds = new Set(pool.map((player) => player.id))
+  const used = new Set()
+  const units = []
+
+  pool.forEach((player) => {
+    if (used.has(player.id)) return
+    const partnerId = lockedPartner.get(player.id)
+    if (partnerId && poolIds.has(partnerId)) {
+      const partner = pool.find((candidate) => candidate.id === partnerId)
+      units.push([player, partner])
+      used.add(player.id)
+      used.add(partnerId)
+    } else {
+      units.push([player])
+      used.add(player.id)
+    }
+  })
+
+  const rankUnit = (unit) => {
+    if (allHaveZeroGames) {
+      return {
+        cooldown: 0,
+        games: 0,
+        order: Math.min(...unit.map(checkInOrderOf)),
+        tie: String(unit[0].id),
+      }
+    }
+    return {
+      cooldown: unit.some((player) => cooldownSet.has(player.id)) ? 1 : 0,
+      games: Math.max(...unit.map(gamesPlayedOf)),
+      order: Math.min(...unit.map(checkInOrderOf)),
+      tie: String(unit[0].id),
+    }
+  }
+
+  units.sort((left, right) => {
+    const leftRank = rankUnit(left)
+    const rightRank = rankUnit(right)
+    if (leftRank.cooldown !== rightRank.cooldown) {
+      return leftRank.cooldown - rightRank.cooldown
+    }
+    if (leftRank.games !== rightRank.games) {
+      return leftRank.games - rightRank.games
+    }
+    if (leftRank.order !== rightRank.order) {
+      return leftRank.order - rightRank.order
+    }
+    return leftRank.tie.localeCompare(rightRank.tie)
+  })
+
+  return units.flat()
+}
+
+const selectLockAwareQueueHead = (orderedPlayers, count, lockedPartner) => {
+  const selected = []
+  const selectedIds = new Set()
+
+  for (const player of orderedPlayers ?? []) {
+    if (selected.length >= count) break
+    if (selectedIds.has(player.id)) continue
+
+    const partnerId = lockedPartner.get(player.id)
+    if (partnerId) {
+      if (selected.length + 2 > count) continue
+      const partner = orderedPlayers.find((candidate) => candidate.id === partnerId)
+      if (!partner) continue
+      selected.push(player, partner)
+      selectedIds.add(player.id)
+      selectedIds.add(partnerId)
+      continue
+    }
+
+    selected.push(player)
+    selectedIds.add(player.id)
+  }
+
+  return selected
+}
+
 const buildLeagueFoursomeWithReplacement = (
   candidates,
   cooldownIds,
@@ -593,7 +706,6 @@ const generateLeagueCourt = (players, options = {}) => {
 
   const cooldownIds = getCooldownIds(matchHistory, courts)
   const lockedPartner = buildLockedPartnerMap(eligible)
-  const eligibleById = new Map(eligible.map((player) => [player.id, player]))
   const ranked = rankByFairness(eligible, cooldownIds)
   const checkedInCount = getRoundRobinActivePlayers(players).length
   const useDynamicLastCourtRule =
@@ -609,28 +721,7 @@ const generateLeagueCourt = (players, options = {}) => {
     if (dynamicCourt) return dynamicCourt
   }
 
-  const windowSize = Math.max(needed, Math.min(CANDIDATE_WINDOW, ranked.length))
-  const candidateMap = new Map()
-  for (let i = 0; i < ranked.length && candidateMap.size < windowSize; i += 1) {
-    const player = ranked[i]
-    candidateMap.set(player.id, player)
-    const partnerId = lockedPartner.get(player.id)
-    if (partnerId && eligibleById.has(partnerId)) {
-      candidateMap.set(partnerId, eligibleById.get(partnerId))
-    }
-  }
-  const candidates = [...candidateMap.values()]
-
-  const leagueCourt = buildLeagueFoursomeWithReplacement(
-    candidates,
-    cooldownIds,
-    lockedPartner
-  )
-  if (leagueCourt) return leagueCourt
-
-  const fallbackGroup = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
-  if (!fallbackGroup) return null
-  return partitionFoursomeWithLocks(fallbackGroup, lockedPartner)
+  return selectLeagueDoublesFoursome(eligible, { cooldownIds, lockedPartner })
 }
 
 // -----------------------------------------------------------------------------
@@ -1176,8 +1267,8 @@ const buildLeagueUpNextPreview = (
   )
 
   const onDeckSize = gameMode === 'singles' ? 2 : 4
-
   const allHaveZeroGames = checkedIn.every((p) => gamesPlayedOf(p) === 0)
+  const rosterById = new Map(checkedIn.map((player) => [player.id, player]))
 
   const orderPool = (pool, cooldownSet) =>
     allHaveZeroGames
@@ -1188,14 +1279,48 @@ const buildLeagueUpNextPreview = (
         })
       : rankByFairness(pool, cooldownSet)
 
-  const orderedSittingOut = orderPool(sittingOut, cooldownIds)
-  const orderedCooldown = orderPool(cooldown, new Set())
-  const ordered = [...orderedSittingOut, ...orderedCooldown]
+  if (gameMode === 'singles') {
+    const orderedSittingOut = orderPool(sittingOut, cooldownIds)
+    const orderedCooldown = orderPool(cooldown, new Set())
+    const queue = [...orderedSittingOut, ...orderedCooldown]
+    return { queue, onDeckPlayers: queue.slice(0, onDeckSize) }
+  }
 
-  const queue = ordered
-  const onDeckPlayers = queue.slice(0, onDeckSize)
+  const sittingOutEligible = enforceAvailableMutualLockedPairs(sittingOut, rosterById)
+  const cooldownEligible = enforceAvailableMutualLockedPairs(cooldown, rosterById)
+  const waitingEligible = [...sittingOutEligible, ...cooldownEligible]
+  const lockedPartner = buildLockedPartnerMap(waitingEligible)
+  const onDeckCourt = selectLeagueDoublesFoursome(waitingEligible, {
+    cooldownIds,
+    lockedPartner,
+  })
+  const onDeckIds = new Set(
+    onDeckCourt
+      ? [...onDeckCourt.teamA, ...onDeckCourt.teamB].map((player) => player.id)
+      : []
+  )
+  const onDeckPlayers = onDeckCourt
+    ? rankByFairness([...onDeckCourt.teamA, ...onDeckCourt.teamB], cooldownIds)
+    : []
+  const orderedSittingOut = orderPoolAsLockedUnits(
+    sittingOutEligible.filter((player) => !onDeckIds.has(player.id)),
+    cooldownIds,
+    allHaveZeroGames,
+    lockedPartner
+  )
+  const orderedCooldown = orderPoolAsLockedUnits(
+    cooldownEligible.filter((player) => !onDeckIds.has(player.id)),
+    new Set(),
+    allHaveZeroGames,
+    lockedPartner
+  )
+  const queue = [...onDeckPlayers, ...orderedSittingOut, ...orderedCooldown]
 
-  return { queue, onDeckPlayers }
+  return {
+    queue,
+    onDeckPlayers:
+      onDeckPlayers.length >= onDeckSize ? onDeckPlayers : queue.slice(0, onDeckSize),
+  }
 }
 
 const materializeLeagueCourtFromQueueHead = (
@@ -1203,7 +1328,14 @@ const materializeLeagueCourtFromQueueHead = (
   { gameMode = 'doubles', courtIndex = 0 } = {}
 ) => {
   const playersPerCourt = leaguePlayersPerCourt(gameMode)
-  const topPlayers = (orderedPlayers ?? []).slice(0, playersPerCourt)
+  const lockedPartner =
+    gameMode === 'singles'
+      ? new Map()
+      : buildLockedPartnerMap(orderedPlayers ?? [])
+  const topPlayers =
+    gameMode === 'singles'
+      ? (orderedPlayers ?? []).slice(0, playersPerCourt)
+      : selectLockAwareQueueHead(orderedPlayers, playersPerCourt, lockedPartner)
   if (topPlayers.length < playersPerCourt) return null
 
   if (gameMode === 'singles') {
@@ -1214,7 +1346,6 @@ const materializeLeagueCourtFromQueueHead = (
     }
   }
 
-  const lockedPartner = buildLockedPartnerMap(topPlayers)
   const partition =
     partitionLeagueFoursome(topPlayers, lockedPartner) ??
     partitionFoursomeWithLocks(topPlayers, lockedPartner)

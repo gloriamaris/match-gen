@@ -1081,6 +1081,35 @@ describe('generateLeagueCourt — doubles priorities', () => {
         court.teamB.some((player) => player.id === 'b'))
     expect(sameTeam).toBe(true)
   })
+
+  it('keeps locked pairs together in Up Next queue and court materialization', () => {
+    const players = [
+      mk('a', { teammateId: 'b', queueOrder: 1, gamesPlayed: 0 }),
+      mk('b', { teammateId: 'a', queueOrder: 2, gamesPlayed: 5 }),
+      mk('c', { queueOrder: 3, gamesPlayed: 0 }),
+      mk('d', { queueOrder: 4, gamesPlayed: 0 }),
+      mk('e', { queueOrder: 5, gamesPlayed: 0 }),
+    ]
+
+    const { queue } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const court = materializeLeagueCourtFromQueueHead(queue, {
+      gameMode: 'doubles',
+      courtIndex: 0,
+    })
+
+    expect(court).not.toBeNull()
+    const sameTeam =
+      (court.teamA.some((player) => player.id === 'a') &&
+        court.teamA.some((player) => player.id === 'b')) ||
+      (court.teamB.some((player) => player.id === 'a') &&
+        court.teamB.some((player) => player.id === 'b'))
+    expect(sameTeam).toBe(true)
+  })
 })
 
 describe('generateLeagueCourt — dynamic last-court rule', () => {
