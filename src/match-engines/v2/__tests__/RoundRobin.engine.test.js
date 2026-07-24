@@ -16,6 +16,7 @@ import {
   isLeagueFreezeValid,
   materializeLeagueCourtFromQueueHead,
   advanceLeagueFreeze,
+  matchSignature,
 } from '../RoundRobin.engine'
 const mk = (id, overrides = {}) => ({
   id,
@@ -1724,5 +1725,110 @@ describe('League Up Next freeze', () => {
     generatedIds.forEach((id) => {
       expect(next.queueIds).not.toContain(id)
     })
+  })
+
+  it('invalidates freeze when the frozen on-deck court was already played', () => {
+    const players = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4 }),
+      mk('e', { queueOrder: 5 }),
+    ]
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    const matchHistory = [
+      {
+        teamAIds: snapshot.onDeckCourt.teamAIds,
+        teamBIds: snapshot.onDeckCourt.teamBIds,
+        winningTeam: 'A',
+      },
+    ]
+    const { players: updatedPlayers } = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: snapshot.onDeckCourt.teamAIds,
+        teamBIds: snapshot.onDeckCourt.teamBIds,
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 1 }
+    )
+
+    expect(
+      isLeagueFreezeValid(snapshot, updatedPlayers, [], {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+        matchHistory,
+      })
+    ).toBe(false)
+  })
+
+  it('recomputes Up Next after a played match instead of repeating the on-deck court', () => {
+    const players = [
+      mk('a', { queueOrder: 1 }),
+      mk('b', { queueOrder: 2 }),
+      mk('c', { queueOrder: 3 }),
+      mk('d', { queueOrder: 4 }),
+      mk('e', { queueOrder: 5 }),
+    ]
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const playedCourt = snapshot.onDeckCourt
+    const matchHistory = [
+      {
+        teamAIds: playedCourt.teamAIds,
+        teamBIds: playedCourt.teamBIds,
+        winningTeam: 'A',
+      },
+    ]
+    const { players: updatedPlayers } = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: playedCourt.teamAIds,
+        teamBIds: playedCourt.teamBIds,
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 1 }
+    )
+    const nextFreeze = advanceLeagueFreeze(
+      snapshot,
+      [...playedCourt.teamAIds, ...playedCourt.teamBIds],
+      updatedPlayers,
+      {
+        numberOfCourts: 1,
+        gameMode: 'doubles',
+        courtMatchups: [],
+        matchHistory,
+      }
+    )
+    const displayed = buildLeagueDisplayedUpNext(updatedPlayers, nextFreeze, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory,
+    })
+    const nextCourt = materializeLeagueCourtFromQueueHead(displayed.queue, {
+      gameMode: 'doubles',
+      courtIndex: 0,
+    })
+
+    expect(nextCourt).not.toBeNull()
+    expect(
+      matchSignature(
+        nextCourt.teamA.map((player) => player.id),
+        nextCourt.teamB.map((player) => player.id)
+      )
+    ).not.toBe(matchSignature(playedCourt.teamAIds, playedCourt.teamBIds))
   })
 })

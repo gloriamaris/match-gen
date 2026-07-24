@@ -179,7 +179,7 @@ export default function AppV2() {
   const [leagueFreeze, setLeagueFreeze] = useState(null)
   const [scoreModal, setScoreModal] = useState({
     isOpen: false,
-    courtIndex: null,
+  courtIndex: null,
   })
   const [errorModal, setErrorModal] = useState({
     isOpen: false,
@@ -336,6 +336,7 @@ export default function AppV2() {
       isLeagueFreezeValid(leagueFreeze, roster, courtMatchups, {
         numberOfCourts,
         gameMode,
+        matchHistory,
       })
     if (valid) return
     const next = captureLeagueFreeze(roster, {
@@ -1090,6 +1091,22 @@ export default function AppV2() {
 
     setCourtMatchups(nextMatchups)
     saveV2CourtMatchups(nextMatchups)
+
+    if (isLeague && leagueFreeze) {
+      const scoredIds = [...teamAIds, ...teamBIds]
+      const nextFreeze = advanceLeagueFreeze(
+        leagueFreeze,
+        scoredIds,
+        updatedPlayers,
+        {
+          courtMatchups: nextMatchups,
+          numberOfCourts,
+          gameMode,
+          matchHistory: nextHistory,
+        }
+      )
+      setLeagueFreeze(nextFreeze)
+    }
 
     if (isRoundRobinComplete(updatedPlayers)) {
       showRoundRobinCompleteModal()

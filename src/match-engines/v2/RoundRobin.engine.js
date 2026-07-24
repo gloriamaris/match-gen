@@ -354,7 +354,11 @@ const compareLeagueAssignmentScore = (left, right) => {
   return left.index - right.index
 }
 
-const partitionLeagueFoursome = (four, lockedPartner = new Map()) => {
+const partitionLeagueFoursome = (
+  four,
+  lockedPartner = new Map(),
+  { freshOnly = false } = {}
+) => {
   if (!Array.isArray(four) || four.length < 4) return null
 
   const lockedPairs = buildLockedPairs(four, lockedPartner)
@@ -365,6 +369,7 @@ const partitionLeagueFoursome = (four, lockedPartner = new Map()) => {
     .filter((assignment) => isLeagueAssignmentFresh(assignment))
 
   if (freshAssignments.length === 0) {
+    if (freshOnly) return null
     if (lockedPairs.length > 0) {
       return partitionFoursomeWithLocks(four, lockedPartner)
     }
@@ -425,7 +430,10 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
   return best
 }
 
-const selectLeagueDoublesFoursome = (eligible, { cooldownIds, lockedPartner }) => {
+const selectLeagueDoublesFoursome = (
+  eligible,
+  { cooldownIds, lockedPartner, freshOnly = false } = {}
+) => {
   const needed = 4
   if (!Array.isArray(eligible) || eligible.length < needed) return null
 
@@ -447,12 +455,16 @@ const selectLeagueDoublesFoursome = (eligible, { cooldownIds, lockedPartner }) =
   const leagueCourt = buildLeagueFoursomeWithReplacement(
     candidates,
     cooldownIds,
-    lockedPartner
+    lockedPartner,
+    { freshOnly }
   )
   if (leagueCourt) return leagueCourt
 
   const fallbackGroup = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
   if (!fallbackGroup) return null
+  if (freshOnly) {
+    return partitionLeagueFoursome(fallbackGroup, lockedPartner, { freshOnly: true })
+  }
   return partitionFoursomeWithLocks(fallbackGroup, lockedPartner)
 }
 
@@ -541,7 +553,8 @@ const selectLockAwareQueueHead = (orderedPlayers, count, lockedPartner) => {
 const buildLeagueFoursomeWithReplacement = (
   candidates,
   cooldownIds,
-  lockedPartner
+  lockedPartner,
+  { freshOnly = false } = {}
 ) => {
   const groups = combinations(candidates, 4)
     .filter((group) => isLockConsistent(group, lockedPartner))
@@ -558,7 +571,7 @@ const buildLeagueFoursomeWithReplacement = (
     })
 
   for (const { group } of groups) {
-    const court = partitionLeagueFoursome(group, lockedPartner)
+    const court = partitionLeagueFoursome(group, lockedPartner, { freshOnly })
     if (court) return court
   }
 
@@ -1293,6 +1306,7 @@ const buildLeagueUpNextPreview = (
   const onDeckCourt = selectLeagueDoublesFoursome(waitingEligible, {
     cooldownIds,
     lockedPartner,
+    freshOnly: true,
   })
   const onDeckIds = new Set(
     onDeckCourt
@@ -1376,11 +1390,16 @@ const buildLeagueDisplayedUpNext = (
   const freezeActive = isLeagueFreezeValid(freezeSnapshot, players, courtMatchups, {
     numberOfCourts,
     gameMode,
+    matchHistory,
   })
   const queue = freezeActive
     ? mergeFrozenUpNextDisplay(freezeSnapshot, preview, players)
     : (preview.queue ?? [])
-  const onDeckPlayers = queue.slice(0, leagueOnDeckSize(gameMode))
+  const onDeckSize = leagueOnDeckSize(gameMode)
+  const onDeckPlayers =
+    preview.onDeckPlayers?.length >= onDeckSize
+      ? preview.onDeckPlayers
+      : queue.slice(0, onDeckSize)
   return { queue, onDeckPlayers, preview, freezeActive }
 }
 
@@ -1461,11 +1480,21 @@ function captureLeagueFreeze(players, options = {}) {
   }
 }
 
+const isOnDeckCourtAlreadyPlayed = (onDeckCourt, matchHistory = []) => {
+  if (!onDeckCourt?.teamAIds?.length || !onDeckCourt?.teamBIds?.length) return false
+  const signature = matchSignature(onDeckCourt.teamAIds, onDeckCourt.teamBIds)
+  return (matchHistory ?? []).some(
+    (entry) =>
+      matchSignature(entry?.teamAIds ?? [], entry?.teamBIds ?? []) === signature
+  )
+}
+
 function isLeagueFreezeValid(snapshot, players, courtMatchups, options = {}) {
-  const { numberOfCourts = 1, gameMode = 'doubles' } = options
+  const { numberOfCourts = 1, gameMode = 'doubles', matchHistory = [] } = options
   if (!snapshot?.queueIds?.length) return false
   if (snapshot.numberOfCourts !== numberOfCourts) return false
   if (snapshot.gameMode !== gameMode) return false
+  if (isOnDeckCourtAlreadyPlayed(snapshot.onDeckCourt, matchHistory)) return false
 
   const byId = new Map((players ?? []).map((player) => [player.id, player]))
   const onCourtIds = new Set(getAllOnCourtPlayerIds(courtMatchups))
