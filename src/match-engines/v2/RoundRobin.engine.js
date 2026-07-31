@@ -1479,6 +1479,8 @@ const materializeLeagueCourtFromQueueHead = (
   }
 }
 
+const LEAGUE_SINGLES_UP_NEXT_LIMIT = 4
+
 const buildLeagueDisplayedUpNext = (
   players,
   freezeSnapshot,
@@ -1500,9 +1502,13 @@ const buildLeagueDisplayedUpNext = (
     gameMode,
     matchHistory,
   })
+  const displayLimit =
+    gameMode === 'singles' ? LEAGUE_SINGLES_UP_NEXT_LIMIT : undefined
   const queue = freezeActive
-    ? mergeFrozenUpNextDisplay(freezeSnapshot, preview, players)
-    : (preview.queue ?? [])
+    ? mergeFrozenUpNextDisplay(freezeSnapshot, preview, players, displayLimit)
+    : displayLimit
+      ? (preview.queue ?? []).slice(0, displayLimit)
+      : (preview.queue ?? [])
   const onDeckSize = leagueOnDeckSize(gameMode)
   const onDeckPlayers =
     preview.onDeckPlayers?.length >= onDeckSize
@@ -1515,8 +1521,11 @@ const buildLeagueDisplayedUpNext = (
 // 8. League Up Next freeze
 // -----------------------------------------------------------------------------
 
+// Singles freezes a fixed top-4 block (and Up Next only shows those 4).
+// Doubles scales with court count so every next court stays locked.
 function leagueFreezeBlockSize(numberOfCourts, gameMode) {
-  return Math.max(numberOfCourts, 1) * (gameMode === 'singles' ? 2 : 4)
+  if (gameMode === 'singles') return LEAGUE_SINGLES_UP_NEXT_LIMIT
+  return Math.max(numberOfCourts, 1) * 4
 }
 
 function leaguePlayersPerCourt(gameMode) {

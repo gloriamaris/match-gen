@@ -527,8 +527,12 @@ export default function V2CourtsView({
                     <p className="mt-0.5 text-xs text-slate-500">
                       {upNextPlayers.length > 0
                         ? leagueFreezeActive
-                          ? 'Highlighted players are locked in and fill the next court when you generate. New check-ins are added after the queue.'
-                          : 'Checked-in players waiting for the next court, in check-in order. Highlighted players fill the next court when you generate.'
+                          ? gameMode === 'singles'
+                            ? 'Top 4 waiting players are locked. Highlighted players fill the next court when you generate.'
+                            : 'Highlighted players are locked in and fill the next court when you generate. New check-ins are added after the queue.'
+                          : gameMode === 'singles'
+                            ? 'Showing the next 4 waiting players. Highlighted players fill the next court when you generate.'
+                            : 'Checked-in players waiting for the next court, in check-in order. Highlighted players fill the next court when you generate.'
                         : upNextEmptyMessage}
                     </p>
                   ) : (

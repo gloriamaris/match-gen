@@ -1629,6 +1629,34 @@ describe('League Up Next freeze', () => {
     )
   })
 
+  it('freezes and displays only the first 4 players for singles Up Next', () => {
+    const players = Array.from({ length: 8 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 1,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(snapshot).not.toBeNull()
+    expect(snapshot.queueIds).toHaveLength(4)
+
+    const displayed = buildLeagueDisplayedUpNext(players, snapshot, {
+      numberOfCourts: 1,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(displayed.freezeActive).toBe(true)
+    expect(displayed.queue.map((player) => player.id)).toEqual(snapshot.queueIds)
+    expect(displayed.queue).toHaveLength(4)
+    expect(displayed.onDeckPlayers).toHaveLength(2)
+  })
+
   it('appends newly checked-in players after the frozen queue in display order', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
