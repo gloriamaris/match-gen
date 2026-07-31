@@ -301,7 +301,7 @@ const keepsLockedPairsTogether = (teamA, teamB, lockedPairs) =>
     )
   })
 
-const isLeagueAssignmentFresh = (assignment) => {
+const isLeagueAssignmentFresh = (assignment, matchHistory = []) => {
   const [a1, a2] = assignment.teamA
   const [b1, b2] = assignment.teamB
 
@@ -315,7 +315,18 @@ const isLeagueAssignmentFresh = (assignment) => {
     [a2, b1],
     [a2, b2],
   ]
-  return crossPairs.every(([left, right]) => !hasOpposedBefore(left, right))
+  if (!crossPairs.every(([left, right]) => !hasOpposedBefore(left, right))) {
+    return false
+  }
+
+  const signature = matchSignature(
+    assignment.teamA.map((player) => player.id),
+    assignment.teamB.map((player) => player.id)
+  )
+  return !(matchHistory ?? []).some(
+    (entry) =>
+      matchSignature(entry?.teamAIds ?? [], entry?.teamBIds ?? []) === signature
+  )
 }
 
 const scoreLeagueAssignment = (assignment) => {
@@ -357,7 +368,7 @@ const compareLeagueAssignmentScore = (left, right) => {
 const partitionLeagueFoursome = (
   four,
   lockedPartner = new Map(),
-  { freshOnly = false } = {}
+  { freshOnly = false, matchHistory = [] } = {}
 ) => {
   if (!Array.isArray(four) || four.length < 4) return null
 
@@ -366,7 +377,7 @@ const partitionLeagueFoursome = (
     .filter((assignment) =>
       keepsLockedPairsTogether(assignment.teamA, assignment.teamB, lockedPairs)
     )
-    .filter((assignment) => isLeagueAssignmentFresh(assignment))
+    .filter((assignment) => isLeagueAssignmentFresh(assignment, matchHistory))
 
   if (freshAssignments.length === 0) {
     if (freshOnly) return null
@@ -432,7 +443,7 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
 
 const selectLeagueDoublesFoursome = (
   eligible,
-  { cooldownIds, lockedPartner, freshOnly = false } = {}
+  { cooldownIds, lockedPartner, freshOnly = false, matchHistory = [] } = {}
 ) => {
   const needed = 4
   if (!Array.isArray(eligible) || eligible.length < needed) return null
@@ -456,14 +467,17 @@ const selectLeagueDoublesFoursome = (
     candidates,
     cooldownIds,
     lockedPartner,
-    { freshOnly }
+    { freshOnly, matchHistory }
   )
   if (leagueCourt) return leagueCourt
 
   const fallbackGroup = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
   if (!fallbackGroup) return null
   if (freshOnly) {
-    return partitionLeagueFoursome(fallbackGroup, lockedPartner, { freshOnly: true })
+    return partitionLeagueFoursome(fallbackGroup, lockedPartner, {
+      freshOnly: true,
+      matchHistory,
+    })
   }
   return partitionFoursomeWithLocks(fallbackGroup, lockedPartner)
 }
@@ -554,7 +568,7 @@ const buildLeagueFoursomeWithReplacement = (
   candidates,
   cooldownIds,
   lockedPartner,
-  { freshOnly = false } = {}
+  { freshOnly = false, matchHistory = [] } = {}
 ) => {
   const groups = combinations(candidates, 4)
     .filter((group) => isLockConsistent(group, lockedPartner))
@@ -571,7 +585,10 @@ const buildLeagueFoursomeWithReplacement = (
     })
 
   for (const { group } of groups) {
-    const court = partitionLeagueFoursome(group, lockedPartner, { freshOnly })
+    const court = partitionLeagueFoursome(group, lockedPartner, {
+      freshOnly,
+      matchHistory,
+    })
     if (court) return court
   }
 
@@ -681,6 +698,7 @@ const generateLeagueCourt = (players, options = {}) => {
     courtIndex,
     gameMode = 'doubles',
     excludePlayerIds,
+    freshOnly = false,
   } = options
 
   if (gameMode === 'singles') {
@@ -729,12 +747,18 @@ const generateLeagueCourt = (players, options = {}) => {
     const dynamicCourt = buildLeagueCourtFromDynamicLastCourtRule(
       ranked,
       matchHistory,
-      lockedPartner
+      lockedPartner,
+      { freshOnly }
     )
     if (dynamicCourt) return dynamicCourt
   }
 
-  return selectLeagueDoublesFoursome(eligible, { cooldownIds, lockedPartner })
+  return selectLeagueDoublesFoursome(eligible, {
+    cooldownIds,
+    lockedPartner,
+    freshOnly,
+    matchHistory,
+  })
 }
 
 // -----------------------------------------------------------------------------
@@ -873,7 +897,8 @@ const addLockedAwarePlayer = (
 const buildLeagueCourtFromDynamicLastCourtRule = (
   ranked,
   matchHistory,
-  lockedPartner
+  lockedPartner,
+  { freshOnly = false } = {}
 ) => {
   if (ranked.length < 4) return null
 
@@ -922,7 +947,7 @@ const buildLeagueCourtFromDynamicLastCourtRule = (
 
   if (selected.length !== 4 || !isLockConsistent(selected, lockedPartner)) return null
 
-  return partitionLeagueFoursome(selected, lockedPartner)
+  return partitionLeagueFoursome(selected, lockedPartner, { freshOnly, matchHistory })
 }
 
 const applyLeagueLastMatchToPlayers = (players, result) => {
@@ -1254,6 +1279,11 @@ const computeRoundRobinMatchupProgress = (players, { gameMode = 'doubles' } = {}
   }
 }
 
+const isRoundRobinScheduleComplete = (players, { gameMode = 'doubles' } = {}) => {
+  const { remaining, total } = computeRoundRobinMatchupProgress(players, { gameMode })
+  return total > 0 && remaining === 0
+}
+
 const buildLeagueUpNextPreview = (
   players,
   {
@@ -1307,6 +1337,7 @@ const buildLeagueUpNextPreview = (
     cooldownIds,
     lockedPartner,
     freshOnly: true,
+    matchHistory,
   })
   const onDeckIds = new Set(
     onDeckCourt
@@ -1339,20 +1370,13 @@ const buildLeagueUpNextPreview = (
 
 const materializeLeagueCourtFromQueueHead = (
   orderedPlayers,
-  { gameMode = 'doubles', courtIndex = 0 } = {}
+  { gameMode = 'doubles', courtIndex = 0, matchHistory = [], cooldownIds = new Set() } = {}
 ) => {
   const playersPerCourt = leaguePlayersPerCourt(gameMode)
-  const lockedPartner =
-    gameMode === 'singles'
-      ? new Map()
-      : buildLockedPartnerMap(orderedPlayers ?? [])
-  const topPlayers =
-    gameMode === 'singles'
-      ? (orderedPlayers ?? []).slice(0, playersPerCourt)
-      : selectLockAwareQueueHead(orderedPlayers, playersPerCourt, lockedPartner)
-  if (topPlayers.length < playersPerCourt) return null
 
   if (gameMode === 'singles') {
+    const topPlayers = (orderedPlayers ?? []).slice(0, playersPerCourt)
+    if (topPlayers.length < playersPerCourt) return null
     return {
       courtIndex,
       teamA: [topPlayers[0]],
@@ -1360,14 +1384,22 @@ const materializeLeagueCourtFromQueueHead = (
     }
   }
 
-  const partition =
-    partitionLeagueFoursome(topPlayers, lockedPartner) ??
-    partitionFoursomeWithLocks(topPlayers, lockedPartner)
-  if (!partition) return null
+  const waiting = orderedPlayers ?? []
+  if (waiting.length < playersPerCourt) return null
+
+  const lockedPartner = buildLockedPartnerMap(waiting)
+  const court = selectLeagueDoublesFoursome(waiting, {
+    cooldownIds,
+    lockedPartner,
+    freshOnly: true,
+    matchHistory,
+  })
+  if (!court) return null
+
   return {
     courtIndex,
-    teamA: partition.teamA,
-    teamB: partition.teamB,
+    teamA: court.teamA,
+    teamB: court.teamB,
   }
 }
 
@@ -1462,6 +1494,8 @@ function captureLeagueFreeze(players, options = {}) {
     materializeLeagueCourtFromQueueHead(preview.queue, {
       gameMode,
       courtIndex: 0,
+      matchHistory,
+      cooldownIds: getCooldownIds(matchHistory, numberOfCourts),
     })
   )
   const queueIds = buildFreezeQueueIds(
@@ -1595,6 +1629,7 @@ export {
   metCount,
   matchSignature,
   computeRoundRobinMatchupProgress,
+  isRoundRobinScheduleComplete,
   buildLeagueUpNextPreview,
   buildLeagueDisplayedUpNext,
   generateLeagueCourt,

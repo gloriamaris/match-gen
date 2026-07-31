@@ -22,17 +22,17 @@ import {
 } from '../../match-engines/v2/ThroneRun.engine'
 import {
   generateRoundRobinCourt,
+  generateLeagueCourt,
   applyMatchResult as rrApplyMatchResult,
   revertMatchResult as rrRevertMatchResult,
   applyLeagueMatchResult,
   revertLeagueMatchResult,
   syncLeagueLastMatchFields,
   computeRoundRobinMatchupProgress,
+  isRoundRobinScheduleComplete,
   advanceLeagueFreeze,
-  buildLeagueDisplayedUpNext,
   captureLeagueFreeze,
   isLeagueFreezeValid,
-  materializeLeagueCourtFromQueueHead,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
   applyLadderRunMatchResult,
@@ -507,17 +507,15 @@ export default function AppV2() {
   const showRoundRobinCompleteModal = () => {
     setErrorModal({
       isOpen: true,
-      title: 'All Round Robin match ups have been generated',
-      message: 'There are no more remaining match ups.',
+      title: 'All matches have been generated',
+      message:
+        'Every scheduled matchup has been played. There are no more courts to generate.',
     })
   }
 
   const isRoundRobinComplete = (playerList) => {
     if (!isV2RoundRobinGameType(gameType)) return false
-    const { remaining, total } = computeRoundRobinMatchupProgress(playerList, {
-      gameMode,
-    })
-    return total > 0 && remaining === 0
+    return isRoundRobinScheduleComplete(playerList, { gameMode })
   }
 
   // -- Court generation (Refresh) ------------------------------------------
@@ -546,10 +544,17 @@ export default function AppV2() {
       setPlayers(currentPlayers)
 
       const otherCourtPlayerIds = []
+      const onCourtPlayerIds = []
       ;(courtMatchups ?? []).forEach((matchup, index) => {
-        if (index === courtIndex || !matchup) return
-        matchup.teamA?.forEach((player) => otherCourtPlayerIds.push(player.id))
-        matchup.teamB?.forEach((player) => otherCourtPlayerIds.push(player.id))
+        if (!matchup) return
+        matchup.teamA?.forEach((player) => {
+          onCourtPlayerIds.push(player.id)
+          if (index !== courtIndex) otherCourtPlayerIds.push(player.id)
+        })
+        matchup.teamB?.forEach((player) => {
+          onCourtPlayerIds.push(player.id)
+          if (index !== courtIndex) otherCourtPlayerIds.push(player.id)
+        })
       })
 
       const medalExcludeIds = currentPlayers
@@ -594,16 +599,14 @@ export default function AppV2() {
       const isLeague = gameType === V2_GAME_TYPES.LEAGUE
 
       if (isLeague) {
-        const { queue } = buildLeagueDisplayedUpNext(currentPlayers, leagueFreeze, {
-          courtMatchups: courtMatchups ?? [],
-          numberOfCourts,
-          gameMode,
-          matchHistory,
-        })
-        const refreshQueue = queue.filter((player) => !otherCourtIdSet.has(player.id))
-        generatedCourt = materializeLeagueCourtFromQueueHead(refreshQueue, {
-          gameMode,
+        generatedCourt = generateLeagueCourt(currentPlayers, {
           courtIndex,
+          courtMatchups: courtMatchups ?? [],
+          matchHistory,
+          courts: numberOfCourts,
+          gameMode,
+          excludePlayerIds: onCourtPlayerIds,
+          freshOnly: true,
         })
       } else if (isRoundRobin) {
         generatedCourt = generateRoundRobinCourt(effectivePlayers, {
@@ -1713,6 +1716,7 @@ export default function AppV2() {
           <V2HistoryView
             matchHistory={matchHistory}
             players={players}
+            gameMode={gameMode}
             onAddMatch={handleAddManualMatch}
             onEditMatch={handleEditMatch}
             onImportMatchHistory={handleImportMatchHistory}

@@ -19,6 +19,7 @@ import {
 import {
   buildLeagueDisplayedUpNext,
   computeRoundRobinMatchupProgress,
+  isRoundRobinScheduleComplete,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
   isV2CourtsQueueUiGameType,
@@ -194,6 +195,8 @@ export default function V2CourtsView({
         : null,
     [isRoundRobin, players, gameMode]
   )
+  const roundRobinComplete =
+    isRoundRobin && isRoundRobinScheduleComplete(players, { gameMode })
   const cooldownIds = isLadderRun
     ? getLadderRunCooldownIds(matchHistory)
     : getCooldownIds(matchHistory, numberOfCourts)
@@ -334,7 +337,8 @@ export default function V2CourtsView({
   const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
   const showWinnersLosersSection =
     isLadderRun && (winnerPlayers.length > 0 || loserPlayers.length > 0)
-  const showUpNextSection = isCourtsQueueUi || upNextPlayers.length > 0
+  const showUpNextSection =
+    isCourtsQueueUi || upNextPlayers.length > 0 || roundRobinComplete
   const upNextEmptyMessage = isLadderRun
     ? explainLadderRunUpNextEmpty(rosterPlayers, {
         numberOfCourts,
@@ -345,6 +349,9 @@ export default function V2CourtsView({
       })
     : isLeague
       ? (() => {
+          if (roundRobinComplete) {
+            return 'All matches have been generated.'
+          }
           const onDeckSize = gameMode === 'singles' ? 2 : 4
           const waiting = checkedInPlayers.filter((player) => !onCourtIds.has(player.id))
           if (waiting.length === 0) {
@@ -404,7 +411,9 @@ export default function V2CourtsView({
       hasMatchup,
       teams: hasMatchup
         ? [teamALabel, teamBLabel]
-        : ['Waiting for players', 'Click refresh to generate'],
+        : roundRobinComplete
+          ? ['All matches generated', 'No more courts to fill']
+          : ['Waiting for players', 'Click refresh to generate'],
     }
   })
 
@@ -413,10 +422,16 @@ export default function V2CourtsView({
   return (
     <div className="relative space-y-6">
       {isRoundRobin && roundRobinProgress && roundRobinProgress.total > 0 ? (
-        <p className="text-sm font-semibold text-slate-600">
-          Remaining Matchups: {roundRobinProgress.remaining}/
-          {roundRobinProgress.total}
-        </p>
+        roundRobinComplete ? (
+          <p className="text-sm font-semibold text-emerald-700">
+            All matches have been generated.
+          </p>
+        ) : (
+          <p className="text-sm font-semibold text-slate-600">
+            Remaining Matchups: {roundRobinProgress.remaining}/
+            {roundRobinProgress.total}
+          </p>
+        )
       ) : null}
       <div className={getGridClasses(numberOfCourts)}>
         {courts.map((court) => (

@@ -10,6 +10,7 @@ import {
   derivePlayerLastMatch,
   metCount,
   computeRoundRobinMatchupProgress,
+  isRoundRobinScheduleComplete,
   buildLeagueDisplayedUpNext,
   buildLeagueUpNextPreview,
   captureLeagueFreeze,
@@ -811,6 +812,26 @@ describe('league lastMatch storage helpers', () => {
       teamBIds: ['g', 'h'],
       result: 'loss',
     })
+  })
+})
+
+describe('isRoundRobinScheduleComplete', () => {
+  it('reports schedule completion when every team pairing has met', () => {
+    const players = [
+      mk('a', { teammateId: 'b' }),
+      mk('b', { teammateId: 'a' }),
+      mk('c', { teammateId: 'd' }),
+      mk('d', { teammateId: 'c' }),
+    ]
+    expect(isRoundRobinScheduleComplete(players, { gameMode: 'doubles' })).toBe(false)
+
+    const { players: afterMatch } = applyMatchResult(players, {
+      courtIndex: 0,
+      teamAIds: ['a', 'b'],
+      teamBIds: ['c', 'd'],
+      winningTeam: 'A',
+    })
+    expect(isRoundRobinScheduleComplete(afterMatch, { gameMode: 'doubles' })).toBe(true)
   })
 })
 
@@ -1776,6 +1797,9 @@ describe('League Up Next freeze', () => {
       mk('c', { queueOrder: 3 }),
       mk('d', { queueOrder: 4 }),
       mk('e', { queueOrder: 5 }),
+      mk('f', { queueOrder: 6 }),
+      mk('g', { queueOrder: 7 }),
+      mk('h', { queueOrder: 8 }),
     ]
     const snapshot = captureLeagueFreeze(players, {
       numberOfCourts: 1,
@@ -1821,6 +1845,7 @@ describe('League Up Next freeze', () => {
     const nextCourt = materializeLeagueCourtFromQueueHead(displayed.queue, {
       gameMode: 'doubles',
       courtIndex: 0,
+      matchHistory,
     })
 
     expect(nextCourt).not.toBeNull()
@@ -1830,5 +1855,65 @@ describe('League Up Next freeze', () => {
         nextCourt.teamB.map((player) => player.id)
       )
     ).not.toBe(matchSignature(playedCourt.teamAIds, playedCourt.teamBIds))
+  })
+
+  it('does not regenerate a locked-team matchup after it was played', () => {
+    const players = [
+      mk('a', { teammateId: 'b', queueOrder: 1 }),
+      mk('b', { teammateId: 'a', queueOrder: 2 }),
+      mk('c', { teammateId: 'd', queueOrder: 3 }),
+      mk('d', { teammateId: 'c', queueOrder: 4 }),
+      mk('e', { teammateId: 'f', queueOrder: 5 }),
+      mk('f', { teammateId: 'e', queueOrder: 6 }),
+      mk('g', { teammateId: 'h', queueOrder: 7 }),
+      mk('h', { teammateId: 'g', queueOrder: 8 }),
+    ]
+
+    const firstCourt = generateLeagueCourt(players, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory: [],
+      freshOnly: true,
+    })
+    expect(firstCourt).not.toBeNull()
+
+    const playedSignature = matchSignature(
+      firstCourt.teamA.map((player) => player.id),
+      firstCourt.teamB.map((player) => player.id)
+    )
+    const matchHistory = [
+      {
+        teamAIds: firstCourt.teamA.map((player) => player.id),
+        teamBIds: firstCourt.teamB.map((player) => player.id),
+        winningTeam: 'A',
+      },
+    ]
+    const { players: updatedPlayers } = applyLeagueMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: firstCourt.teamA.map((player) => player.id),
+        teamBIds: firstCourt.teamB.map((player) => player.id),
+        winningTeam: 'A',
+      },
+      { numberOfCourts: 1 }
+    )
+
+    const nextCourt = generateLeagueCourt(updatedPlayers, {
+      courtIndex: 0,
+      courts: 1,
+      gameMode: 'doubles',
+      matchHistory,
+      freshOnly: true,
+    })
+
+    expect(nextCourt).not.toBeNull()
+    expect(
+      matchSignature(
+        nextCourt.teamA.map((player) => player.id),
+        nextCourt.teamB.map((player) => player.id)
+      )
+    ).not.toBe(playedSignature)
   })
 })

@@ -256,7 +256,15 @@ export function loadV2Players() {
         ? value.teamBIds.filter((id) => typeof id === 'string')
         : null
       const result = value.result === 'win' || value.result === 'loss' ? value.result : null
-      if (!teamAIds || !teamBIds || teamAIds.length !== 2 || teamBIds.length !== 2 || !result) {
+      const validTeamSize = (ids) => ids.length === 1 || ids.length === 2
+      if (
+        !teamAIds ||
+        !teamBIds ||
+        !validTeamSize(teamAIds) ||
+        !validTeamSize(teamBIds) ||
+        teamAIds.length !== teamBIds.length ||
+        !result
+      ) {
         return null
       }
       return {

@@ -4,15 +4,6 @@ import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../fo
 
 const SCORE_OPTIONS = Array.from({ length: 16 }, (_, i) => i)
 
-const EMPTY_FORM = {
-  court: 'Court 1',
-  teamAIds: ['', ''],
-  teamBIds: ['', ''],
-  scoreA: '',
-  scoreB: '',
-  verifiedBy: '',
-}
-
 const EMPTY_ERRORS = {
   court: '',
   teamA: '',
@@ -22,9 +13,24 @@ const EMPTY_ERRORS = {
   duplicate: '',
 }
 
-const resolveTeamIds = (teamIds, teamName, players) => {
-  if (Array.isArray(teamIds) && teamIds.length === 2) {
-    return teamIds
+const emptyTeamIds = (playersPerTeam) =>
+  Array.from({ length: playersPerTeam }, () => '')
+
+const createEmptyForm = (playersPerTeam) => ({
+  court: 'Court 1',
+  teamAIds: emptyTeamIds(playersPerTeam),
+  teamBIds: emptyTeamIds(playersPerTeam),
+  scoreA: '',
+  scoreB: '',
+  verifiedBy: '',
+})
+
+const resolveTeamIds = (teamIds, teamName, players, playersPerTeam) => {
+  if (Array.isArray(teamIds) && teamIds.length > 0) {
+    return Array.from(
+      { length: playersPerTeam },
+      (_, index) => teamIds[index] ?? ''
+    )
   }
 
   const names = String(teamName ?? '')
@@ -32,24 +38,21 @@ const resolveTeamIds = (teamIds, teamName, players) => {
     .map((value) => value.trim())
     .filter(Boolean)
 
-  while (names.length < 2) {
-    names.push('')
-  }
-
-  return names.map(
-    (name) => players.find((player) => player.name === name)?.id ?? ''
-  )
+  return Array.from({ length: playersPerTeam }, (_, index) => {
+    const name = names[index] ?? ''
+    return name ? players.find((player) => player.name === name)?.id ?? '' : ''
+  })
 }
 
-const matchToForm = (match, players) => {
+const matchToForm = (match, players, playersPerTeam) => {
   const [rawScoreA = '', rawScoreB = ''] = String(match.score ?? '')
     .split('-')
     .map((value) => value.trim())
 
   return {
     court: match.court ?? 'Court 1',
-    teamAIds: resolveTeamIds(match.teamAIds, match.teamA, players),
-    teamBIds: resolveTeamIds(match.teamBIds, match.teamB, players),
+    teamAIds: resolveTeamIds(match.teamAIds, match.teamA, players, playersPerTeam),
+    teamBIds: resolveTeamIds(match.teamBIds, match.teamB, players, playersPerTeam),
     scoreA: rawScoreA,
     scoreB: rawScoreB,
     verifiedBy: match.enteredBy ?? '',
@@ -59,6 +62,7 @@ const matchToForm = (match, players) => {
 export default function V2HistoryView({
   matchHistory = [],
   players = [],
+  gameMode = 'doubles',
   onAddMatch,
   onEditMatch,
   onImportMatchHistory,
@@ -68,10 +72,13 @@ export default function V2HistoryView({
   onExportCsv,
   onExportPdf,
 }) {
+  const playersPerTeam = gameMode === 'singles' ? 1 : 2
+  const selectPrompt =
+    playersPerTeam === 1 ? 'Select a player' : 'Select two players'
   const importInputRef = useRef(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingMatchId, setEditingMatchId] = useState(null)
-  const [form, setForm] = useState(EMPTY_FORM)
+  const [form, setForm] = useState(() => createEmptyForm(playersPerTeam))
   const [errors, setErrors] = useState(EMPTY_ERRORS)
 
   const sortedPlayers = useMemo(
@@ -91,14 +98,14 @@ export default function V2HistoryView({
 
   const openAddModal = () => {
     setEditingMatchId(null)
-    setForm(EMPTY_FORM)
+    setForm(createEmptyForm(playersPerTeam))
     setErrors(EMPTY_ERRORS)
     setModalOpen(true)
   }
 
   const openEditModal = (match) => {
     setEditingMatchId(match.id ?? null)
-    setForm(matchToForm(match, players))
+    setForm(matchToForm(match, players, playersPerTeam))
     setErrors(EMPTY_ERRORS)
     setModalOpen(true)
   }
@@ -126,8 +133,8 @@ export default function V2HistoryView({
 
     const nextErrors = {
       court: form.court.trim() ? '' : 'Court is required',
-      teamA: teamAIds.length === 2 ? '' : 'Select two players',
-      teamB: teamBIds.length === 2 ? '' : 'Select two players',
+      teamA: teamAIds.length === playersPerTeam ? '' : selectPrompt,
+      teamB: teamBIds.length === playersPerTeam ? '' : selectPrompt,
       scoreA: Number.isNaN(scoreA) ? 'Score is required' : '',
       scoreB: Number.isNaN(scoreB) ? 'Score is required' : '',
       duplicate: hasDuplicates ? 'Players can only appear once' : '',
@@ -156,6 +163,8 @@ export default function V2HistoryView({
   }
 
   const isEditing = Boolean(editingMatchId)
+  const teamGridClass =
+    playersPerTeam === 1 ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-2 gap-3'
 
   const sortedHistory = sortMatchHistoryChronologically(matchHistory)
 
@@ -340,16 +349,18 @@ export default function V2HistoryView({
               </label>
 
               <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Team A</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {[0, 1].map((slot) => (
+                <p className="text-sm font-medium text-slate-700">
+                  {playersPerTeam === 1 ? 'Player A' : 'Team A'}
+                </p>
+                <div className={teamGridClass}>
+                  {Array.from({ length: playersPerTeam }, (_, slot) => (
                     <label
                       key={`team-a-${slot}`}
                       className="flex flex-col gap-2 text-xs font-medium text-slate-600"
                     >
-                      Player {slot + 1}
+                      {playersPerTeam === 1 ? 'Player' : `Player ${slot + 1}`}
                       <select
-                        value={form.teamAIds[slot]}
+                        value={form.teamAIds[slot] ?? ''}
                         onChange={(e) =>
                           updateTeamId('teamAIds', slot, e.target.value)
                         }
@@ -373,16 +384,20 @@ export default function V2HistoryView({
               </div>
 
               <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Team B</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {[0, 1].map((slot) => (
+                <p className="text-sm font-medium text-slate-700">
+                  {playersPerTeam === 1 ? 'Player B' : 'Team B'}
+                </p>
+                <div className={teamGridClass}>
+                  {Array.from({ length: playersPerTeam }, (_, slot) => (
                     <label
                       key={`team-b-${slot}`}
                       className="flex flex-col gap-2 text-xs font-medium text-slate-600"
                     >
-                      Player {slot + 3}
+                      {playersPerTeam === 1
+                        ? 'Player'
+                        : `Player ${slot + 1 + playersPerTeam}`}
                       <select
-                        value={form.teamBIds[slot]}
+                        value={form.teamBIds[slot] ?? ''}
                         onChange={(e) =>
                           updateTeamId('teamBIds', slot, e.target.value)
                         }
