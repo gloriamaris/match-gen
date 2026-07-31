@@ -1629,35 +1629,71 @@ describe('League Up Next freeze', () => {
     )
   })
 
-  it('freezes and displays only the first 4 players for singles Up Next', () => {
+  it('freezes and displays courts * 2 players for singles Up Next', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
     )
 
-    const snapshot = captureLeagueFreeze(players, {
+    const oneCourt = captureLeagueFreeze(players, {
       numberOfCourts: 1,
       gameMode: 'singles',
       courtMatchups: [],
       matchHistory: [],
     })
+    expect(oneCourt).not.toBeNull()
+    expect(oneCourt.queueIds).toHaveLength(2)
 
-    expect(snapshot).not.toBeNull()
-    expect(snapshot.queueIds).toHaveLength(4)
-
-    const displayed = buildLeagueDisplayedUpNext(players, snapshot, {
+    const oneCourtDisplay = buildLeagueDisplayedUpNext(players, oneCourt, {
       numberOfCourts: 1,
       gameMode: 'singles',
       courtMatchups: [],
       matchHistory: [],
     })
+    expect(oneCourtDisplay.freezeActive).toBe(true)
+    expect(oneCourtDisplay.queue).toHaveLength(2)
+    expect(oneCourtDisplay.onDeckPlayers).toHaveLength(2)
 
-    expect(displayed.freezeActive).toBe(true)
-    expect(displayed.queue.map((player) => player.id)).toEqual(snapshot.queueIds)
-    expect(displayed.queue).toHaveLength(4)
-    expect(displayed.onDeckPlayers).toHaveLength(2)
+    const twoCourts = captureLeagueFreeze(players, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    expect(twoCourts).not.toBeNull()
+    expect(twoCourts.queueIds).toHaveLength(4)
+
+    const twoCourtDisplay = buildLeagueDisplayedUpNext(players, twoCourts, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    expect(twoCourtDisplay.freezeActive).toBe(true)
+    expect(twoCourtDisplay.queue).toHaveLength(4)
   })
 
-  it('appends newly checked-in players after the frozen queue in display order', () => {
+  it('limits doubles Up Next display to courts * 4', () => {
+    const players = Array.from({ length: 12 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    const displayed = buildLeagueDisplayedUpNext(players, snapshot, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+
+    expect(snapshot.queueIds).toHaveLength(4)
+    expect(displayed.queue).toHaveLength(4)
+  })
+
+  it('keeps the frozen slate stable when new players check in beyond the display limit', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
     )
@@ -1675,11 +1711,10 @@ describe('League Up Next freeze', () => {
       matchHistory: [],
     })
 
-    expect(merged.map((player) => player.id).slice(0, 8)).toEqual(
-      snapshot.queueIds.slice(0, 8)
-    )
-    expect(merged.map((player) => player.id)).toContain('p9')
-    expect(merged.map((player) => player.id).indexOf('p9')).toBe(8)
+    // 2 courts * 4 = 8 display slots; new check-ins wait outside Up Next.
+    expect(merged.map((player) => player.id)).toEqual(snapshot.queueIds.slice(0, 8))
+    expect(merged).toHaveLength(8)
+    expect(merged.map((player) => player.id)).not.toContain('p9')
   })
 
   it('refresh parity uses the displayed queue head for on-deck court', () => {
