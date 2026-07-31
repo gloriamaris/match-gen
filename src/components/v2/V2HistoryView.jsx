@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react'
-import { Pencil, X } from 'lucide-react'
+import { Pencil, Trash2, X } from 'lucide-react'
 import { formatStoredMatchDate, sortMatchHistoryChronologically } from '../../formatStoredMatchDate'
 
 const SCORE_OPTIONS = Array.from({ length: 16 }, (_, i) => i)
@@ -65,6 +65,7 @@ export default function V2HistoryView({
   gameMode = 'doubles',
   onAddMatch,
   onEditMatch,
+  onDeleteMatch,
   onImportMatchHistory,
   historyTableRef,
   exportMenuOpen,
@@ -113,6 +114,18 @@ export default function V2HistoryView({
   const closeModal = () => {
     setModalOpen(false)
     setEditingMatchId(null)
+  }
+
+  const handleDelete = (match) => {
+    if (!match?.id || !onDeleteMatch) return
+    const label = match.court ? ` on ${match.court}` : ''
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(`Delete this match${label}? Player stats will be reverted.`)
+    ) {
+      return
+    }
+    onDeleteMatch(match.id)
   }
 
   const updateTeamId = (team, slot, value) => {
@@ -292,14 +305,25 @@ export default function V2HistoryView({
                       {formatStoredMatchDate(match.timestamp)}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(match)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                        aria-label={`Edit match on ${match.court ?? 'court'}`}
-                      >
-                        <Pencil className="h-4 w-4" aria-hidden="true" />
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(match)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+                          aria-label={`Edit match on ${match.court ?? 'court'}`}
+                        >
+                          <Pencil className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(match)}
+                          disabled={!match.id}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:bg-transparent disabled:hover:text-slate-600"
+                          aria-label={`Delete match on ${match.court ?? 'court'}`}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )

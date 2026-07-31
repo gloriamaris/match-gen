@@ -1397,6 +1397,40 @@ export default function AppV2() {
     }
   }
 
+  const handleDeleteMatch = (matchId) => {
+    const matchIndex = matchHistory.findIndex((match) => match.id === matchId)
+    if (matchIndex === -1) return
+
+    const oldMatch = matchHistory[matchIndex]
+    const isThroneRun = gameType === V2_GAME_TYPES.THRONE_RUN
+    const isRoundRobin = isV2RoundRobinGameType(gameType)
+    const isLeague = gameType === V2_GAME_TYPES.LEAGUE
+    const isLadderRun = gameType === V2_GAME_TYPES.LADDER_RUN
+    const useThroneRunEngine =
+      isThroneRun &&
+      (oldMatch.ejectedWinnerIds != null || oldMatch.courtIndex != null)
+
+    const updatedPlayers = useThroneRunEngine
+      ? trRevertMatchResult(players, oldMatch, { maxWinStreak: winStreak })
+      : isRoundRobin
+        ? isLeague
+          ? revertLeagueMatchResult(players, oldMatch, {
+              numberOfCourts,
+              matchHistory,
+            })
+          : rrRevertMatchResult(players, oldMatch)
+        : isLadderRun
+          ? revertLadderRunMatchResult(players, oldMatch, { skillAdjustment })
+          : revertMatchResult(players, oldMatch, { skillAdjustment })
+
+    setPlayers(updatedPlayers)
+    saveV2Players(updatedPlayers)
+
+    const nextHistory = matchHistory.filter((match) => match.id !== matchId)
+    setMatchHistory(nextHistory)
+    saveV2MatchHistory(nextHistory)
+  }
+
   // -- Exports --------------------------------------------------------------
 
   const exportTableAsPdf = (title, tableRef, filename) => {
@@ -1719,6 +1753,7 @@ export default function AppV2() {
             gameMode={gameMode}
             onAddMatch={handleAddManualMatch}
             onEditMatch={handleEditMatch}
+            onDeleteMatch={handleDeleteMatch}
             onImportMatchHistory={handleImportMatchHistory}
             historyTableRef={historyTableRef}
             exportMenuOpen={exportMenuOpen}
