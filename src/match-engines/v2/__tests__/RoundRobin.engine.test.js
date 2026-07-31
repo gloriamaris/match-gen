@@ -1586,7 +1586,11 @@ describe('League Up Next freeze', () => {
     expect(doublesIds).toEqual(new Set(['a', 'b', 'c', 'd']))
     expect(doublesCourt.courtIndex).toBe(2)
 
-    const singlesQueue = [mk('x', { queueOrder: 1 }), mk('y', { queueOrder: 2 }), mk('z')]
+    const singlesQueue = [
+      mk('x', { queueOrder: 1 }),
+      mk('y', { queueOrder: 2 }),
+      mk('z', { queueOrder: 3 }),
+    ]
     const singlesCourt = materializeLeagueCourtFromQueueHead(singlesQueue, {
       gameMode: 'singles',
       courtIndex: 1,
@@ -1915,5 +1919,81 @@ describe('League Up Next freeze', () => {
         nextCourt.teamB.map((player) => player.id)
       )
     ).not.toBe(playedSignature)
+  })
+
+  it('does not regenerate a singles matchup after it was played (freshOnly)', () => {
+    let players = ['a', 'b', 'c', 'd'].map((id, index) =>
+      mk(id, { queueOrder: index + 1 })
+    )
+    let matchHistory = []
+    const seen = new Set()
+
+    for (let i = 0; i < 6; i += 1) {
+      const court = generateLeagueCourt(players, {
+        courtIndex: 0,
+        courts: 1,
+        gameMode: 'singles',
+        matchHistory,
+        freshOnly: true,
+      })
+      expect(court).not.toBeNull()
+      const sig = [court.teamA[0].id, court.teamB[0].id].sort().join('-')
+      expect(seen.has(sig)).toBe(false)
+      seen.add(sig)
+
+      const { players: next, historyEntry } = applyLeagueMatchResult(
+        players,
+        {
+          courtIndex: 0,
+          teamAIds: [court.teamA[0].id],
+          teamBIds: [court.teamB[0].id],
+          winningTeam: 'A',
+        },
+        { numberOfCourts: 1 }
+      )
+      players = next
+      matchHistory = [...matchHistory, historyEntry]
+    }
+
+    expect(
+      generateLeagueCourt(players, {
+        courtIndex: 0,
+        courts: 1,
+        gameMode: 'singles',
+        matchHistory,
+        freshOnly: true,
+      })
+    ).toBeNull()
+  })
+
+  it('singles Up Next skips already-played pairs for on-deck', () => {
+    const players = [
+      mk('a', { queueOrder: 1, gamesPlayed: 1, opponentCounts: { b: 1 } }),
+      mk('b', { queueOrder: 2, gamesPlayed: 1, opponentCounts: { a: 1 } }),
+      mk('c', { queueOrder: 3, gamesPlayed: 2, opponentCounts: { d: 1 } }),
+      mk('d', { queueOrder: 4, gamesPlayed: 2, opponentCounts: { c: 1 } }),
+      mk('e', { queueOrder: 5, gamesPlayed: 2 }),
+      mk('f', { queueOrder: 6, gamesPlayed: 2 }),
+    ]
+
+    const { onDeckPlayers } = buildLeagueUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    expect(onDeckPlayers).toHaveLength(2)
+    expect(metCount(onDeckPlayers[0], onDeckPlayers[1])).toBe(0)
+
+    const court = materializeLeagueCourtFromQueueHead(players, {
+      gameMode: 'singles',
+      courtIndex: 0,
+      matchHistory: [],
+    })
+    expect(court).not.toBeNull()
+    expect(metCount(court.teamA[0], court.teamB[0])).toBe(0)
+    expect(
+      [court.teamA[0].id, court.teamB[0].id].sort().join('-')
+    ).not.toBe('a-b')
   })
 })

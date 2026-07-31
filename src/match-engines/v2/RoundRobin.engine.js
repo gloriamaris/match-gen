@@ -441,6 +441,56 @@ const selectBestGroup = (candidates, needed, cooldownIds, lockedPartner = new Ma
   return best
 }
 
+// Pick the best 1v1 pair: fewest prior meetings, then fewest games, then
+// fewest players on cooldown. With freshOnly, already-met pairs are rejected
+// so League round-robin never rematches before the schedule is complete.
+const selectBestSinglesPair = (
+  eligible,
+  cooldownIds = new Set(),
+  { freshOnly = false } = {}
+) => {
+  if (!Array.isArray(eligible) || eligible.length < 2) return null
+
+  const ranked = rankByFairness(eligible, cooldownIds)
+  const pool = freshOnly
+    ? ranked
+    : ranked.slice(0, Math.max(2, Math.min(CANDIDATE_WINDOW, ranked.length)))
+
+  let best = null
+  let bestMet = Infinity
+  let bestGames = Infinity
+  let bestCooldown = Infinity
+
+  for (let i = 0; i < pool.length; i += 1) {
+    for (let j = i + 1; j < pool.length; j += 1) {
+      const left = pool[i]
+      const right = pool[j]
+      const met = metCount(left, right)
+      if (freshOnly && met > 0) continue
+
+      const games = gamesPlayedOf(left) + gamesPlayedOf(right)
+      const cooldown =
+        (cooldownIds.has(left.id) ? 1 : 0) + (cooldownIds.has(right.id) ? 1 : 0)
+      const isBetter =
+        best === null ||
+        met < bestMet ||
+        (met === bestMet &&
+          (games < bestGames ||
+            (games === bestGames && cooldown < bestCooldown)))
+
+      if (isBetter) {
+        best = [left, right]
+        bestMet = met
+        bestGames = games
+        bestCooldown = cooldown
+      }
+    }
+  }
+
+  if (!best) return null
+  return { teamA: [best[0]], teamB: [best[1]] }
+}
+
 const selectLeagueDoublesFoursome = (
   eligible,
   { cooldownIds, lockedPartner, freshOnly = false, matchHistory = [] } = {}
@@ -622,6 +672,7 @@ const generateRoundRobinCourt = (players, options = {}) => {
     courts = 2,
     gameMode = 'doubles',
     excludePlayerIds,
+    freshOnly = false,
   } = options
 
   const teamSize = teamSizeForMode(gameMode)
@@ -657,8 +708,15 @@ const generateRoundRobinCourt = (players, options = {}) => {
 
   const cooldownIds = getCooldownIds(matchHistory, courts)
 
-  // Locked pairs only apply to doubles; singles is strictly 1v1.
-  const lockedPartner = teamSize === 2 ? buildLockedPartnerMap(eligible) : new Map()
+  // Singles is strictly 1v1. League passes freshOnly so already-played pairs
+  // are never regenerated before every matchup has happened once.
+  if (teamSize === 1) {
+    const singlesPool = freshOnly ? eligible : shuffle(eligible)
+    return selectBestSinglesPair(singlesPool, cooldownIds, { freshOnly })
+  }
+
+  // Locked pairs only apply to doubles.
+  const lockedPartner = buildLockedPartnerMap(eligible)
   const eligibleById = new Map(eligible.map((p) => [p.id, p]))
 
   // Rank by fairness, then shuffle within equal tiers so repeated refreshes are
@@ -683,10 +741,6 @@ const generateRoundRobinCourt = (players, options = {}) => {
 
   const group = selectBestGroup(candidates, needed, cooldownIds, lockedPartner)
   if (!group) return null
-
-  if (teamSize === 1) {
-    return { teamA: [group[0]], teamB: [group[1]] }
-  }
 
   return partitionFoursomeWithLocks(group, lockedPartner)
 }
@@ -1325,8 +1379,28 @@ const buildLeagueUpNextPreview = (
   if (gameMode === 'singles') {
     const orderedSittingOut = orderPool(sittingOut, cooldownIds)
     const orderedCooldown = orderPool(cooldown, new Set())
-    const queue = [...orderedSittingOut, ...orderedCooldown]
-    return { queue, onDeckPlayers: queue.slice(0, onDeckSize) }
+    const waiting = [...orderedSittingOut, ...orderedCooldown]
+    const onDeckCourt =
+      selectBestSinglesPair(waiting, cooldownIds, { freshOnly: true }) ??
+      selectBestSinglesPair(waiting, new Set(), { freshOnly: true })
+    const onDeckPlayers = onDeckCourt
+      ? rankByFairness(
+          [...onDeckCourt.teamA, ...onDeckCourt.teamB],
+          cooldownIds
+        )
+      : []
+    const onDeckIds = new Set(onDeckPlayers.map((player) => player.id))
+    const queue = [
+      ...onDeckPlayers,
+      ...waiting.filter((player) => !onDeckIds.has(player.id)),
+    ]
+    return {
+      queue,
+      onDeckPlayers:
+        onDeckPlayers.length >= onDeckSize
+          ? onDeckPlayers
+          : queue.slice(0, onDeckSize),
+    }
   }
 
   const sittingOutEligible = enforceAvailableMutualLockedPairs(sittingOut, rosterById)
@@ -1375,12 +1449,14 @@ const materializeLeagueCourtFromQueueHead = (
   const playersPerCourt = leaguePlayersPerCourt(gameMode)
 
   if (gameMode === 'singles') {
-    const topPlayers = (orderedPlayers ?? []).slice(0, playersPerCourt)
-    if (topPlayers.length < playersPerCourt) return null
+    const court =
+      selectBestSinglesPair(orderedPlayers, cooldownIds, { freshOnly: true }) ??
+      selectBestSinglesPair(orderedPlayers, new Set(), { freshOnly: true })
+    if (!court) return null
     return {
       courtIndex,
-      teamA: [topPlayers[0]],
-      teamB: [topPlayers[1]],
+      teamA: court.teamA,
+      teamB: court.teamB,
     }
   }
 
