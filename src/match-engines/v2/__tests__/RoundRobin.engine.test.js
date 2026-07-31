@@ -1774,7 +1774,7 @@ describe('League Up Next freeze', () => {
     ).toBe(false)
   })
 
-  it('advances freeze by leading with a fresh on-deck court and keeping tail order', () => {
+  it('advances freeze by preserving remaining slate order', () => {
     const players = Array.from({ length: 8 }, (_, index) =>
       mk(`p${index + 1}`, { queueOrder: index + 1 })
     )
@@ -1805,14 +1805,62 @@ describe('League Up Next freeze', () => {
     expect(next).not.toBeNull()
     expect(next.queueIds).toHaveLength(4)
     expect(next.queueIds).toEqual(['p5', 'p6', 'p7', 'p8'])
-    expect(next.queueIds.slice(0, 4)).toEqual(
-      next.onDeckCourt
-        ? [...next.onDeckCourt.teamAIds, ...next.onDeckCourt.teamBIds]
-        : next.queueIds.slice(0, 4)
-    )
+    expect(new Set([
+      ...(next.onDeckCourt?.teamAIds ?? []),
+      ...(next.onDeckCourt?.teamBIds ?? []),
+    ])).toEqual(new Set(next.queueIds))
     generatedIds.forEach((id) => {
       expect(next.queueIds).not.toContain(id)
     })
+  })
+
+  it('keeps singles Up Next order stable after filling a court from the freeze', () => {
+    const players = Array.from({ length: 8 }, (_, index) =>
+      mk(`p${index + 1}`, { queueOrder: index + 1 })
+    )
+    const snapshot = captureLeagueFreeze(players, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups: [],
+      matchHistory: [],
+    })
+    expect(snapshot.queueIds).toHaveLength(4)
+
+    const generatedIds = [
+      ...(snapshot.onDeckCourt?.teamAIds ?? []),
+      ...(snapshot.onDeckCourt?.teamBIds ?? []),
+    ]
+    expect(generatedIds).toHaveLength(2)
+
+    const byId = new Map(players.map((player) => [player.id, player]))
+    const courtMatchups = [
+      {
+        teamA: [byId.get(generatedIds[0])],
+        teamB: [byId.get(generatedIds[1])],
+      },
+    ]
+    const remainingBefore = snapshot.queueIds.filter((id) => !generatedIds.includes(id))
+
+    const next = advanceLeagueFreeze(snapshot, generatedIds, players, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups,
+      matchHistory: [],
+    })
+
+    expect(next).not.toBeNull()
+    expect(next.queueIds.slice(0, remainingBefore.length)).toEqual(remainingBefore)
+
+    const displayed = buildLeagueDisplayedUpNext(players, next, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      courtMatchups,
+      matchHistory: [],
+    })
+    expect(displayed.freezeActive).toBe(true)
+    expect(displayed.queue.map((player) => player.id).slice(0, remainingBefore.length)).toEqual(
+      remainingBefore
+    )
   })
 
   it('invalidates freeze when the frozen on-deck court was already played', () => {

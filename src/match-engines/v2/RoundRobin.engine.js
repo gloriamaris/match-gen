@@ -1506,10 +1506,21 @@ const buildLeagueDisplayedUpNext = (
     ? mergeFrozenUpNextDisplay(freezeSnapshot, preview, players, displayLimit)
     : (preview.queue ?? []).slice(0, displayLimit)
   const onDeckSize = leagueOnDeckSize(gameMode)
+  const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  const frozenOnDeckPlayers = freezeActive
+    ? [
+        ...(freezeSnapshot?.onDeckCourt?.teamAIds ?? []),
+        ...(freezeSnapshot?.onDeckCourt?.teamBIds ?? []),
+      ]
+        .map((id) => byId.get(id))
+        .filter(Boolean)
+    : []
   const onDeckPlayers =
-    preview.onDeckPlayers?.length >= onDeckSize
-      ? preview.onDeckPlayers
-      : queue.slice(0, onDeckSize)
+    frozenOnDeckPlayers.length >= onDeckSize
+      ? frozenOnDeckPlayers.slice(0, onDeckSize)
+      : preview.onDeckPlayers?.length >= onDeckSize
+        ? preview.onDeckPlayers
+        : queue.slice(0, onDeckSize)
   return { queue, onDeckPlayers, preview, freezeActive }
 }
 
@@ -1652,38 +1663,48 @@ function materializeFrozenLeagueCourt(snapshot, players, options = {}) {
 function advanceLeagueFreeze(snapshot, generatedPlayerIds, players, options = {}) {
   const numberOfCourts = options.numberOfCourts ?? snapshot?.numberOfCourts ?? 1
   const gameMode = options.gameMode ?? snapshot?.gameMode ?? 'doubles'
-  const playersPerCourt = leaguePlayersPerCourt(gameMode)
+  const courtMatchups = options.courtMatchups ?? []
+  const matchHistory = options.matchHistory ?? []
   const generatedSet = new Set(generatedPlayerIds)
+  const blockSize = leagueFreezeBlockSize(numberOfCourts, gameMode)
 
+  const byId = new Map((players ?? []).map((player) => [player.id, player]))
+  const onCourtIds = new Set(getAllOnCourtPlayerIds(courtMatchups))
+  const isAvailable = (id) => {
+    if (id == null || generatedSet.has(id) || onCourtIds.has(id)) return false
+    return Boolean(byId.get(id)?.checkedIn)
+  }
+
+  // Keep the remaining frozen slate in its existing order so Up Next does not
+  // reshuffle when a court is filled from the freeze.
+  const remainingFrozen = (snapshot?.queueIds ?? []).filter(isAvailable)
   const fresh = captureLeagueFreeze(players, {
     ...options,
     numberOfCourts,
     gameMode,
   })
-  if (!fresh) return null
 
-  const onDeckCourt = fresh.onDeckCourt
-  const leadIds = onDeckCourt
-    ? onDeckCourtIds(onDeckCourt)
-    : fresh.queueIds.slice(0, playersPerCourt)
-  const leadSet = new Set(leadIds)
-  const blockSize = leagueFreezeBlockSize(numberOfCourts, gameMode)
-  const merged = [...leadIds]
-  const mergedSet = new Set(merged)
-
-  const appendFrom = (ids) => {
-    for (const id of ids) {
-      if (merged.length >= blockSize) break
-      if (mergedSet.has(id) || generatedSet.has(id) || leadSet.has(id)) continue
-      merged.push(id)
-      mergedSet.add(id)
-    }
+  const merged = []
+  const mergedSet = new Set()
+  const pushId = (id) => {
+    if (!isAvailable(id) || mergedSet.has(id) || merged.length >= blockSize) return
+    merged.push(id)
+    mergedSet.add(id)
   }
-
-  appendFrom(snapshot?.queueIds ?? [])
-  appendFrom(fresh.queueIds)
+  remainingFrozen.forEach(pushId)
+  ;(fresh?.queueIds ?? []).forEach(pushId)
 
   if (merged.length === 0) return null
+
+  const mergedPlayers = merged.map((id) => byId.get(id)).filter(Boolean)
+  const onDeckCourt = courtToTeamIds(
+    materializeLeagueCourtFromQueueHead(mergedPlayers, {
+      gameMode,
+      courtIndex: 0,
+      matchHistory,
+      cooldownIds: getCooldownIds(matchHistory, numberOfCourts),
+    })
+  )
 
   return {
     queueIds: merged,

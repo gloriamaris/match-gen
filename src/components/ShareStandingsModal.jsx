@@ -17,7 +17,7 @@ const WinsLossesRecord = ({ player }) => {
 
 const formatPointDiff = (player) => {
   const pd = Number(player?.pointDifferential) || 0
-  return String(pd)
+  return pd > 0 ? `+${pd}` : String(pd)
 }
 
 export default function ShareStandingsModal({
@@ -158,7 +158,7 @@ export default function ShareStandingsModal({
                             {player ? <WinsLossesRecord player={player} /> : ''}
                           </td>
                           <td className="h-9 border-t border-slate-300 px-2 py-2 text-center">
-                            {player ? '+' + formatPointDiff(player) : ''}
+                            {player ? formatPointDiff(player) : ''}
                           </td>
                         </tr>
                       ))}

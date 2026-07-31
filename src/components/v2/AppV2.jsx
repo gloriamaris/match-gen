@@ -33,6 +33,7 @@ import {
   advanceLeagueFreeze,
   captureLeagueFreeze,
   isLeagueFreezeValid,
+  materializeFrozenLeagueCourt,
 } from '../../match-engines/v2/RoundRobin.engine'
 import {
   applyLadderRunMatchResult,
@@ -599,15 +600,35 @@ export default function AppV2() {
       const isLeague = gameType === V2_GAME_TYPES.LEAGUE
 
       if (isLeague) {
-        generatedCourt = generateLeagueCourt(currentPlayers, {
-          courtIndex,
-          courtMatchups: courtMatchups ?? [],
-          matchHistory,
-          courts: numberOfCourts,
-          gameMode,
-          excludePlayerIds: onCourtPlayerIds,
-          freshOnly: true,
-        })
+        const freezeUsable =
+          leagueFreeze &&
+          leagueFreeze.numberOfCourts === numberOfCourts &&
+          leagueFreeze.gameMode === gameMode &&
+          isLeagueFreezeValid(leagueFreeze, currentPlayers, courtMatchups ?? [], {
+            numberOfCourts,
+            gameMode,
+            matchHistory,
+          })
+
+        if (freezeUsable) {
+          generatedCourt = materializeFrozenLeagueCourt(
+            leagueFreeze,
+            currentPlayers,
+            { gameMode, courtIndex }
+          )
+        }
+
+        if (!generatedCourt) {
+          generatedCourt = generateLeagueCourt(currentPlayers, {
+            courtIndex,
+            courtMatchups: courtMatchups ?? [],
+            matchHistory,
+            courts: numberOfCourts,
+            gameMode,
+            excludePlayerIds: onCourtPlayerIds,
+            freshOnly: true,
+          })
+        }
       } else if (isRoundRobin) {
         generatedCourt = generateRoundRobinCourt(effectivePlayers, {
           courtIndex,
