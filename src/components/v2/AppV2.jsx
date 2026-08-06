@@ -72,6 +72,7 @@ import {
   DEFAULT_V2_COURTS,
   DEFAULT_V2_GAME_MODE,
   DEFAULT_V2_GAME_TYPE,
+  DEFAULT_V2_GROUPED_BY_SKILL_LEVEL,
   DEFAULT_V2_SKILL_ADJUSTMENT,
   DEFAULT_V2_WIN_STREAK,
   V2_GAME_TYPES,
@@ -81,14 +82,16 @@ import {
   loadV2Courts,
   loadV2GameMode,
   loadV2GameType,
+  loadV2GroupedBySkillLevel,
   loadV2SkillAdjustment,
-  loadV2WinStreak,
   loadV2MatchHistory,
   loadV2Players,
   loadV2SessionStarted,
+  loadV2WinStreak,
   persistV2Session,
   saveV2AllowAdjacentSkillMixing,
   saveV2CourtMatchups,
+  saveV2GroupedBySkillLevel,
   saveV2MatchHistory,
   saveV2Players,
   saveV2SkillAdjustment,
@@ -156,6 +159,9 @@ export default function AppV2() {
   const [numberOfCourts, setNumberOfCourts] = useState(loadV2Courts)
   const [winStreak, setWinStreak] = useState(loadV2WinStreak)
   const [skillAdjustment, setSkillAdjustment] = useState(loadV2SkillAdjustment)
+  const [groupedBySkillLevel, setGroupedBySkillLevel] = useState(
+    loadV2GroupedBySkillLevel
+  )
   const [allowAdjacentSkillMixing, setAllowAdjacentSkillMixing] = useState(
     loadV2AllowAdjacentSkillMixing
   )
@@ -285,6 +291,7 @@ export default function AppV2() {
       numberOfCourts,
       gameMode,
       matchHistory,
+      groupedBySkillLevel,
       allowAdjacentSkillMixing,
     })
     const onDeckSize = ladderRunOnDeckSize(gameMode)
@@ -307,6 +314,7 @@ export default function AppV2() {
       numberOfCourts,
       gameMode,
       matchHistory,
+      groupedBySkillLevel,
       allowAdjacentSkillMixing,
     })
     setLadderRunFreeze((prev) => {
@@ -321,6 +329,7 @@ export default function AppV2() {
     players,
     matchHistory,
     allowAdjacentSkillMixing,
+    groupedBySkillLevel,
     ladderRunFreeze,
   ])
 
@@ -441,6 +450,11 @@ export default function AppV2() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    saveV2GroupedBySkillLevel(groupedBySkillLevel)
+  }, [groupedBySkillLevel])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
     saveV2AllowAdjacentSkillMixing(allowAdjacentSkillMixing)
   }, [allowAdjacentSkillMixing])
 
@@ -466,6 +480,7 @@ export default function AppV2() {
         courts: numberOfCourts,
         winStreak,
         skillAdjustment,
+        groupedBySkillLevel,
         allowAdjacentSkillMixing,
       })
       setSessionStarted(true)
@@ -486,6 +501,7 @@ export default function AppV2() {
       setNumberOfCourts(DEFAULT_V2_COURTS)
       setWinStreak(DEFAULT_V2_WIN_STREAK)
       setSkillAdjustment(DEFAULT_V2_SKILL_ADJUSTMENT)
+      setGroupedBySkillLevel(DEFAULT_V2_GROUPED_BY_SKILL_LEVEL)
       setAllowAdjacentSkillMixing(DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING)
       setPlayers([])
       setCourtMatchups(null)
@@ -760,6 +776,7 @@ export default function AppV2() {
               {
                 gameMode,
                 courtIndex,
+                groupedBySkillLevel,
                 allowAdjacentSkillMixing,
               }
             )
@@ -769,6 +786,7 @@ export default function AppV2() {
             generatedCourt = generateLadderRunCourt(currentPlayers, {
               numberOfCourts,
               gameMode,
+              groupedBySkillLevel,
               allowAdjacentSkillMixing,
               courtMatchups: courtMatchups ?? [],
               matchHistory,
@@ -890,6 +908,7 @@ export default function AppV2() {
             numberOfCourts,
             gameMode,
             matchHistory,
+            groupedBySkillLevel,
             allowAdjacentSkillMixing,
           }
         )
@@ -1049,12 +1068,16 @@ export default function AppV2() {
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else if (isLadderRun) {
-      const result = applyLadderRunMatchResult(players, {
-        courtIndex,
-        teamAIds,
-        teamBIds,
-        winningTeam,
-      }, { skillAdjustment })
+      const result = applyLadderRunMatchResult(
+        players,
+        {
+          courtIndex,
+          teamAIds,
+          teamBIds,
+          winningTeam,
+        },
+        { skillAdjustment, groupedBySkillLevel }
+      )
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else {
@@ -1154,12 +1177,16 @@ export default function AppV2() {
           winningTeam,
         })
       : isLadderRun
-        ? applyLadderRunMatchResult(players, {
-            courtIndex: null,
-            teamAIds,
-            teamBIds,
-            winningTeam,
-          }, { skillAdjustment })
+        ? applyLadderRunMatchResult(
+            players,
+            {
+              courtIndex: null,
+              teamAIds,
+              teamBIds,
+              winningTeam,
+            },
+            { skillAdjustment, groupedBySkillLevel }
+          )
         : applyMatchResult(
             players,
             { courtIndex: null, teamAIds, teamBIds, winningTeam },
@@ -1233,12 +1260,16 @@ export default function AppV2() {
               winningTeam,
             })
         : isLadderRun
-          ? applyLadderRunMatchResult(currentPlayers, {
-              courtIndex: null,
-              teamAIds: match.teamAIds,
-              teamBIds: match.teamBIds,
-              winningTeam,
-            }, { skillAdjustment })
+          ? applyLadderRunMatchResult(
+              currentPlayers,
+              {
+                courtIndex: null,
+                teamAIds: match.teamAIds,
+                teamBIds: match.teamBIds,
+                winningTeam,
+              },
+              { skillAdjustment, groupedBySkillLevel }
+            )
           : applyMatchResult(
               currentPlayers,
               {
@@ -1321,7 +1352,10 @@ export default function AppV2() {
             })
           : rrRevertMatchResult(players, oldMatch)
         : isLadderRun
-          ? revertLadderRunMatchResult(players, oldMatch, { skillAdjustment })
+          ? revertLadderRunMatchResult(players, oldMatch, {
+              skillAdjustment,
+              groupedBySkillLevel,
+            })
         : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     let historyEntry
@@ -1362,12 +1396,16 @@ export default function AppV2() {
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else if (isLadderRun) {
-      const result = applyLadderRunMatchResult(updatedPlayers, {
-        courtIndex: oldMatch.courtIndex ?? null,
-        teamAIds,
-        teamBIds,
-        winningTeam,
-      }, { skillAdjustment })
+      const result = applyLadderRunMatchResult(
+        updatedPlayers,
+        {
+          courtIndex: oldMatch.courtIndex ?? null,
+          teamAIds,
+          teamBIds,
+          winningTeam,
+        },
+        { skillAdjustment, groupedBySkillLevel }
+      )
       updatedPlayers = result.players
       historyEntry = result.historyEntry
     } else {
@@ -1441,7 +1479,10 @@ export default function AppV2() {
             })
           : rrRevertMatchResult(players, oldMatch)
         : isLadderRun
-          ? revertLadderRunMatchResult(players, oldMatch, { skillAdjustment })
+          ? revertLadderRunMatchResult(players, oldMatch, {
+              skillAdjustment,
+              groupedBySkillLevel,
+            })
           : revertMatchResult(players, oldMatch, { skillAdjustment })
 
     setPlayers(updatedPlayers)
@@ -1694,12 +1735,22 @@ export default function AppV2() {
             (gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
               gameType === V2_GAME_TYPES.LADDER_RUN) ? (
               <div className="mt-2 flex flex-wrap gap-2">
-                <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  Skill Adjustment: {skillAdjustment}
-                </label>
-                <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  Adjacent Skill Mixing: {allowAdjacentSkillMixing ? 'On' : 'Off'}
-                </label>
+                {gameType === V2_GAME_TYPES.LADDER_RUN ? (
+                  <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Grouped by Skill Level: {groupedBySkillLevel ? 'On' : 'Off'}
+                  </label>
+                ) : null}
+                {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+                (gameType === V2_GAME_TYPES.LADDER_RUN && groupedBySkillLevel) ? (
+                  <>
+                    <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Skill Adjustment: {skillAdjustment}
+                    </label>
+                    <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Adjacent Skill Mixing: {allowAdjacentSkillMixing ? 'On' : 'Off'}
+                    </label>
+                  </>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -1711,6 +1762,7 @@ export default function AppV2() {
             numberOfCourts={numberOfCourts}
             winStreak={winStreak}
             skillAdjustment={skillAdjustment}
+            groupedBySkillLevel={groupedBySkillLevel}
             allowAdjacentSkillMixing={allowAdjacentSkillMixing}
             sessionStarted={sessionStarted}
             isStartingSession={isStartingSession}
@@ -1720,6 +1772,7 @@ export default function AppV2() {
             onSelectNumberOfCourts={setNumberOfCourts}
             onSelectWinStreak={setWinStreak}
             onSelectSkillAdjustment={setSkillAdjustment}
+            onToggleGroupedBySkillLevel={setGroupedBySkillLevel}
             onToggleAdjacentSkillMixing={setAllowAdjacentSkillMixing}
             onStartSession={handleStartSession}
             onEndSession={handleEndSession}
@@ -1736,6 +1789,7 @@ export default function AppV2() {
               checkedInCount={checkedInCount}
               winStreak={winStreak}
               skillAdjustment={skillAdjustment}
+              groupedBySkillLevel={groupedBySkillLevel}
               allowAdjacentSkillMixing={allowAdjacentSkillMixing}
               progressivePlayFreeze={progressivePlayFreeze}
               ladderRunFreeze={ladderRunFreeze}

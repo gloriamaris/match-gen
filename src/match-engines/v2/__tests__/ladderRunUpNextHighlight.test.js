@@ -16,6 +16,36 @@ const makePlayer = (id, overrides = {}) => ({
 })
 
 describe('Ladder Run Up Next on-deck highlight count', () => {
+  it('keeps four on-deck players when groupedBySkillLevel is off', () => {
+    const players = Array.from({ length: 12 }, (_, index) =>
+      makePlayer(`p${index + 1}`, {
+        skillLevel: index % 2 === 0 ? 'Beginner' : 'Advanced',
+        queueOrder: index + 1,
+        gamesPlayed: 1,
+        lastResult: index < 6 ? 'win' : 'loss',
+      })
+    )
+    const courtMatchups = [
+      null,
+      {
+        teamA: [makePlayer('on1'), makePlayer('on2')],
+        teamB: [makePlayer('on3'), makePlayer('on4')],
+      },
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      groupedBySkillLevel: false,
+      allowAdjacentSkillMixing: false,
+      courtMatchups,
+      matchHistory: [],
+    })
+
+    expect(preview.queue).toHaveLength(8)
+    expect(preview.onDeckPlayers).toHaveLength(4)
+  })
+
   it('highlights four on-deck players when two courts have enough waiting players', () => {
     const players = Array.from({ length: 12 }, (_, index) =>
       makePlayer(`p${index + 1}`, {

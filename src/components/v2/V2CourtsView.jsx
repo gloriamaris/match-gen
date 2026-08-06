@@ -85,6 +85,15 @@ const sortPlayersByQueueOrderOldestFirst = (a, b) => {
   return String(a.name ?? '').localeCompare(String(b.name ?? ''))
 }
 
+const toFlatStatusGroup = (playerList) => [
+  {
+    skillLevel: 'all',
+    label: '',
+    stars: '',
+    players: playerList,
+  },
+]
+
 const groupPlayersBySkillLevel = (playerList, { preserveOrder = false } = {}) =>
   SKILL_LEVEL_ORDER.map((skillLevel) => {
     const players = playerList.filter(
@@ -161,6 +170,7 @@ export default function V2CourtsView({
   checkedInCount = 0,
   winStreak = 0,
   skillAdjustment = 1,
+  groupedBySkillLevel = true,
   allowAdjacentSkillMixing = true,
   progressivePlayFreeze = null,
   ladderRunFreeze = null,
@@ -227,6 +237,7 @@ export default function V2CourtsView({
     ? buildLadderRunUpNextPreview(rosterPlayers, {
         numberOfCourts,
         gameMode,
+        groupedBySkillLevel,
         allowAdjacentSkillMixing,
         courtMatchups,
         matchHistory,
@@ -334,15 +345,40 @@ export default function V2CourtsView({
     : []
   const winnerGroups = groupPlayersBySkillLevel(winnerPlayers, { preserveOrder: true })
   const loserGroups = groupPlayersBySkillLevel(loserPlayers, { preserveOrder: true })
+  const winnersOnCourt = playingPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'win')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const winnersSittingOut = sittingOutPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'win')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const winnersCooldown = cooldownPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'win')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const losersOnCourt = playingPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'loss')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const losersSittingOut = sittingOutPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'loss')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const losersCooldown = cooldownPlayers
+    .filter((player) => getPlayerLastResult(player, matchHistory) === 'loss')
+    .sort(sortPlayersByQueueOrderOldestFirst)
+  const showOffModeWinnersLosersStatusSection =
+    isLadderRun &&
+    !groupedBySkillLevel &&
+    (winnerPlayers.length > 0 || loserPlayers.length > 0)
   const showWinnersSection = gameType === V2_GAME_TYPES.THRONE_RUN
   const showWinnersLosersSection =
-    isLadderRun && (winnerPlayers.length > 0 || loserPlayers.length > 0)
+    isLadderRun &&
+    groupedBySkillLevel &&
+    (winnerPlayers.length > 0 || loserPlayers.length > 0)
   const showUpNextSection =
     isCourtsQueueUi || upNextPlayers.length > 0 || roundRobinComplete
   const upNextEmptyMessage = isLadderRun
     ? explainLadderRunUpNextEmpty(rosterPlayers, {
         numberOfCourts,
         gameMode,
+        groupedBySkillLevel,
         allowAdjacentSkillMixing,
         courtMatchups,
         matchHistory,
@@ -391,7 +427,7 @@ export default function V2CourtsView({
           })
   const showSkillMovementsSection =
     gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
-    gameType === V2_GAME_TYPES.LADDER_RUN
+    (gameType === V2_GAME_TYPES.LADDER_RUN && groupedBySkillLevel)
 
   const courts = Array.from({ length: numberOfCourts }, (_, index) => {
     const matchup = courtMatchups?.[index] ?? null
@@ -520,7 +556,9 @@ export default function V2CourtsView({
                   {isLadderRun ? (
                     <p className="mt-0.5 text-xs text-slate-500">
                       {upNextPlayers.length > 0
-                        ? 'Grouped by check-in order, recent win/loss status, and skill level for the next courts.'
+                        ? groupedBySkillLevel
+                          ? 'Grouped by check-in order, recent win/loss status, and skill level for the next courts.'
+                          : 'Grouped by check-in order and recent win/loss status for the next courts.'
                         : 'No complete court group is ready yet.'}
                     </p>
                   ) : isLeague ? (
@@ -788,6 +826,131 @@ export default function V2CourtsView({
                   gamesClassName="ml-1 font-normal text-rose-500"
                 />
               )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {showOffModeWinnersLosersStatusSection ? (
+        <section
+          aria-labelledby="winners-losers-status-heading"
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+        >
+          <div className="border-b border-slate-200 px-4 py-3 sm:px-5">
+            <h2
+              id="winners-losers-status-heading"
+              className="text-sm font-semibold text-slate-900"
+            >
+              Winners & Losers
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Split by result and current status (on court, sitting out, cooldown).
+            </p>
+          </div>
+          <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
+            <div className="space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                Winners ({winnerPlayers.length})
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">
+                    On Court ({winnersOnCourt.length})
+                  </p>
+                  {winnersOnCourt.length === 0 ? (
+                    <p className="mt-1 text-xs text-emerald-500">No winners currently on court.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(winnersOnCourt)}
+                      groupHeadingClassName="text-emerald-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700"
+                      gamesClassName="ml-1 font-normal text-emerald-500"
+                    />
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">
+                    Sitting Out ({winnersSittingOut.length})
+                  </p>
+                  {winnersSittingOut.length === 0 ? (
+                    <p className="mt-1 text-xs text-emerald-500">No winners currently sitting out.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(winnersSittingOut)}
+                      groupHeadingClassName="text-emerald-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700"
+                      gamesClassName="ml-1 font-normal text-emerald-500"
+                    />
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">
+                    Cooldown ({winnersCooldown.length})
+                  </p>
+                  {winnersCooldown.length === 0 ? (
+                    <p className="mt-1 text-xs text-emerald-500">No winners on cooldown.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(winnersCooldown)}
+                      groupHeadingClassName="text-emerald-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700"
+                      gamesClassName="ml-1 font-normal text-emerald-500"
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="space-y-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-rose-600">
+                Losers ({loserPlayers.length})
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">
+                    On Court ({losersOnCourt.length})
+                  </p>
+                  {losersOnCourt.length === 0 ? (
+                    <p className="mt-1 text-xs text-rose-500">No losers currently on court.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(losersOnCourt)}
+                      groupHeadingClassName="text-rose-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-0.5 text-xs font-medium text-rose-700"
+                      gamesClassName="ml-1 font-normal text-rose-500"
+                    />
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">
+                    Sitting Out ({losersSittingOut.length})
+                  </p>
+                  {losersSittingOut.length === 0 ? (
+                    <p className="mt-1 text-xs text-rose-500">No losers currently sitting out.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(losersSittingOut)}
+                      groupHeadingClassName="text-rose-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-0.5 text-xs font-medium text-rose-700"
+                      gamesClassName="ml-1 font-normal text-rose-500"
+                    />
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">
+                    Cooldown ({losersCooldown.length})
+                  </p>
+                  {losersCooldown.length === 0 ? (
+                    <p className="mt-1 text-xs text-rose-500">No losers on cooldown.</p>
+                  ) : (
+                    <V2PlayerStatusGroups
+                      groups={toFlatStatusGroup(losersCooldown)}
+                      groupHeadingClassName="text-rose-500"
+                      chipClassName="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-0.5 text-xs font-medium text-rose-700"
+                      gamesClassName="ml-1 font-normal text-rose-500"
+                    />
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </section>

@@ -175,9 +175,106 @@ describe('applyLadderRunMatchResult', () => {
     expect(byId.get('c').skillLevel).toBe('Intermediate')
     expect(byId.get('c').currentLossStreak).toBe(1)
   })
+
+  it('does not upgrade or downgrade skill when groupedBySkillLevel is off', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice' }),
+      makePlayer('b', { skillLevel: 'Novice' }),
+      makePlayer('c', { skillLevel: 'Intermediate' }),
+      makePlayer('d', { skillLevel: 'Intermediate' }),
+    ]
+
+    const result = applyLadderRunMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 1, groupedBySkillLevel: false }
+    )
+    const byId = new Map(result.players.map((player) => [player.id, player]))
+
+    expect(byId.get('a').skillLevel).toBe('Novice')
+    expect(byId.get('b').skillLevel).toBe('Novice')
+    expect(byId.get('c').skillLevel).toBe('Intermediate')
+    expect(byId.get('d').skillLevel).toBe('Intermediate')
+    expect(result.historyEntry.skillChanges).toEqual({})
+  })
 })
 
 describe('buildLadderRunUpNextPreview', () => {
+  it('with groupedBySkillLevel off, orders veterans as winners first then losers', () => {
+    const players = [
+      makePlayer('w1', { queueOrder: 1, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l1', { queueOrder: 2, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'loss' }),
+      makePlayer('w2', { queueOrder: 3, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l2', { queueOrder: 4, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'loss' }),
+      makePlayer('w3', { queueOrder: 5, skillLevel: 'Intermediate', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l3', { queueOrder: 6, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'loss' }),
+      makePlayer('w4', { queueOrder: 7, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l4', { queueOrder: 8, skillLevel: 'Intermediate', gamesPlayed: 2, lastResult: 'loss' }),
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'doubles',
+      groupedBySkillLevel: false,
+      allowAdjacentSkillMixing: false,
+    })
+
+    expect(preview.groups).toHaveLength(2)
+    expect(preview.groups[0].every((player) => player.lastResult === 'win')).toBe(true)
+    expect(preview.groups[1].every((player) => player.lastResult === 'loss')).toBe(true)
+  })
+
+  it('with groupedBySkillLevel off in singles, on-deck and next group follow win then loss ordering', () => {
+    const players = [
+      makePlayer('w1', { queueOrder: 1, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l1', { queueOrder: 2, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'loss' }),
+      makePlayer('w2', { queueOrder: 3, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('l2', { queueOrder: 4, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'loss' }),
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 2,
+      gameMode: 'singles',
+      groupedBySkillLevel: false,
+      allowAdjacentSkillMixing: false,
+    })
+
+    expect(preview.queue.map((player) => player.id)).toEqual(['w1', 'w2', 'l1', 'l2'])
+    expect(preview.onDeckPlayers.map((player) => player.id)).toEqual(['w1', 'w2'])
+  })
+
+  it('with groupedBySkillLevel off, still prioritizes sitting-out players before cooldown players', () => {
+    const players = [
+      makePlayer('s1', { queueOrder: 1, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('s2', { queueOrder: 2, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('c1', { queueOrder: 3, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('c2', { queueOrder: 4, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('c3', { queueOrder: 5, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('c4', { queueOrder: 6, skillLevel: 'Intermediate', gamesPlayed: 2, lastResult: 'win' }),
+    ]
+    const matchHistory = [
+      {
+        teamAIds: ['c1', 'c2'],
+        teamBIds: ['c3', 'c4'],
+      },
+    ]
+
+    const preview = buildLadderRunUpNextPreview(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      groupedBySkillLevel: false,
+      allowAdjacentSkillMixing: false,
+      matchHistory,
+    })
+
+    expect(preview.queue.map((player) => player.id).slice(0, 2)).toEqual(['s1', 's2'])
+  })
+
   it('groups doubles players by check-in order and same skill level', () => {
     const players = [
       makePlayer('n1', { skillLevel: 'Novice', queueOrder: 1 }),
@@ -866,6 +963,27 @@ describe('explainLadderRunUpNextEmpty', () => {
 })
 
 describe('generateLadderRunCourt', () => {
+  it('with groupedBySkillLevel off, can generate a mixed-skill veteran winner court', () => {
+    const players = [
+      makePlayer('w1', { queueOrder: 1, skillLevel: 'Beginner', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('w2', { queueOrder: 2, skillLevel: 'Advanced', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('w3', { queueOrder: 3, skillLevel: 'Intermediate', gamesPlayed: 2, lastResult: 'win' }),
+      makePlayer('w4', { queueOrder: 4, skillLevel: 'Novice', gamesPlayed: 2, lastResult: 'win' }),
+    ]
+
+    const court = generateLadderRunCourt(players, {
+      numberOfCourts: 1,
+      gameMode: 'doubles',
+      groupedBySkillLevel: false,
+      allowAdjacentSkillMixing: false,
+      courtMatchups: [],
+      courtIndex: 0,
+      matchHistory: [],
+    })
+
+    expect(court).not.toBeNull()
+    expect([...court.teamA, ...court.teamB]).toHaveLength(4)
+  })
   it('prefers mixed doubles pairings when possible', () => {
     const players = [
       makePlayer('m1', { gender: 'Male', skillLevel: 'Novice', queueOrder: 1 }),

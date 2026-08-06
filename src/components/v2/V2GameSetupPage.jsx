@@ -4,6 +4,7 @@ import V2AnnouncementsPane from './V2AnnouncementsPane'
 import V2CourtsSection from './V2CourtsSection'
 import V2GameModeSection from './V2GameModeSection'
 import V2GameTypeSection from './V2GameTypeSection'
+import V2GroupedBySkillLevelSection from './V2GroupedBySkillLevelSection'
 import V2SkillAdjustmentSection from './V2SkillAdjustmentSection'
 import V2WinStreakSection from './V2WinStreakSection'
 import { V2_GAME_TYPES } from './v2Storage'
@@ -14,6 +15,7 @@ export default function V2GameSetupPage({
   numberOfCourts,
   winStreak,
   skillAdjustment,
+  groupedBySkillLevel,
   allowAdjacentSkillMixing,
   sessionStarted,
   isStartingSession,
@@ -23,12 +25,16 @@ export default function V2GameSetupPage({
   onSelectNumberOfCourts,
   onSelectWinStreak,
   onSelectSkillAdjustment,
+  onToggleGroupedBySkillLevel,
   onToggleAdjacentSkillMixing,
   onStartSession,
   onEndSession,
 }) {
   const sessionBusy = isStartingSession || isEndingSession
   const selectionDisabled = sessionStarted || sessionBusy
+  const showSkillLevelOptions =
+    gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
+    (gameType === V2_GAME_TYPES.LADDER_RUN && groupedBySkillLevel)
 
   return (
     <div className="space-y-8">
@@ -64,16 +70,21 @@ export default function V2GameSetupPage({
           onSelectNumberOfCourts={onSelectNumberOfCourts}
           disabled={selectionDisabled}
         />
-        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
-        gameType === V2_GAME_TYPES.LADDER_RUN ? (
+        {gameType === V2_GAME_TYPES.LADDER_RUN ? (
+          <V2GroupedBySkillLevelSection
+            groupedBySkillLevel={groupedBySkillLevel}
+            onToggleGroupedBySkillLevel={onToggleGroupedBySkillLevel}
+            disabled={selectionDisabled}
+          />
+        ) : null}
+        {showSkillLevelOptions ? (
           <V2AdjacentSkillMixingSection
             allowAdjacentSkillMixing={allowAdjacentSkillMixing}
             onToggleAdjacentSkillMixing={onToggleAdjacentSkillMixing}
             disabled={selectionDisabled}
           />
         ) : null}
-        {gameType === V2_GAME_TYPES.PROGRESSIVE_PLAY ||
-        gameType === V2_GAME_TYPES.LADDER_RUN ? (
+        {showSkillLevelOptions ? (
           <V2SkillAdjustmentSection
             skillAdjustment={skillAdjustment}
             onSelectSkillAdjustment={onSelectSkillAdjustment}

@@ -6,6 +6,7 @@ export const V2_STORAGE_KEYS = {
   courts: `${V2_STORAGE_PREFIX}courts`,
   winStreak: `${V2_STORAGE_PREFIX}winStreak`,
   skillAdjustment: `${V2_STORAGE_PREFIX}skillAdjustment`,
+  groupedBySkillLevel: `${V2_STORAGE_PREFIX}groupedBySkillLevel`,
   allowAdjacentSkillMixing: `${V2_STORAGE_PREFIX}allowAdjacentSkillMixing`,
   sessionStarted: `${V2_STORAGE_PREFIX}sessionStarted`,
   sessionId: `${V2_STORAGE_PREFIX}sessionId`,
@@ -51,6 +52,7 @@ export const DEFAULT_V2_GAME_MODE = 'doubles'
 export const DEFAULT_V2_COURTS = 2
 export const DEFAULT_V2_WIN_STREAK = 0
 export const DEFAULT_V2_SKILL_ADJUSTMENT = 1
+export const DEFAULT_V2_GROUPED_BY_SKILL_LEVEL = true
 export const DEFAULT_V2_ALLOW_ADJACENT_SKILL_MIXING = false
 
 export const V2_TEAM_COLOR_CLASSES = [
@@ -193,6 +195,20 @@ export function saveV2SkillAdjustment(skillAdjustment) {
   window.localStorage.setItem(V2_STORAGE_KEYS.skillAdjustment, String(skillAdjustment))
 }
 
+export function loadV2GroupedBySkillLevel() {
+  const stored = window.localStorage.getItem(V2_STORAGE_KEYS.groupedBySkillLevel)
+  if (stored === 'true') return true
+  if (stored === 'false') return false
+  return DEFAULT_V2_GROUPED_BY_SKILL_LEVEL
+}
+
+export function saveV2GroupedBySkillLevel(value) {
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.groupedBySkillLevel,
+    value ? 'true' : 'false'
+  )
+}
+
 export function loadV2AllowAdjacentSkillMixing() {
   const stored = window.localStorage.getItem(V2_STORAGE_KEYS.allowAdjacentSkillMixing)
   if (stored === 'true') return true
@@ -213,6 +229,7 @@ export function persistV2Session({
   courts,
   winStreak,
   skillAdjustment,
+  groupedBySkillLevel,
   allowAdjacentSkillMixing,
 }) {
   const sessionId = createUniqueId('session')
@@ -223,6 +240,12 @@ export function persistV2Session({
   window.localStorage.setItem(
     V2_STORAGE_KEYS.skillAdjustment,
     String(skillAdjustment ?? DEFAULT_V2_SKILL_ADJUSTMENT)
+  )
+  window.localStorage.setItem(
+    V2_STORAGE_KEYS.groupedBySkillLevel,
+    (groupedBySkillLevel ?? DEFAULT_V2_GROUPED_BY_SKILL_LEVEL)
+      ? 'true'
+      : 'false'
   )
   window.localStorage.setItem(
     V2_STORAGE_KEYS.allowAdjacentSkillMixing,

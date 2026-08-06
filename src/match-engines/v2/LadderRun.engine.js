@@ -55,23 +55,50 @@ const unitMatchesGroupSkill = (
   unitPlayers,
   targetRank,
   targetBucket,
-  allowAdjacentSkillMixing
+  allowAdjacentSkillMixing,
+  groupedBySkillLevel = true
 ) => {
+  if (!groupedBySkillLevel) {
+    return true
+  }
   if (!allowAdjacentSkillMixing) {
     return collectiveSkillRank(unitPlayers) === targetRank
   }
   return skillBucketForPlayers(unitPlayers, true) === targetBucket
 }
 
-const playerMatchesGroupSkill = (player, targetRank, targetBucket, allowAdjacentSkillMixing) =>
-  unitMatchesGroupSkill([player], targetRank, targetBucket, allowAdjacentSkillMixing)
+const playerMatchesGroupSkill = (
+  player,
+  targetRank,
+  targetBucket,
+  allowAdjacentSkillMixing,
+  groupedBySkillLevel = true
+) =>
+  unitMatchesGroupSkill(
+    [player],
+    targetRank,
+    targetBucket,
+    allowAdjacentSkillMixing,
+    groupedBySkillLevel
+  )
 
-const isBatchSkillCompatible = (batch, allowAdjacentSkillMixing) => {
+const isBatchSkillCompatible = (
+  batch,
+  allowAdjacentSkillMixing,
+  groupedBySkillLevel = true
+) => {
+  if (!groupedBySkillLevel) return true
   if (!Array.isArray(batch) || batch.length === 0) return true
   const targetRank = collectiveSkillRank(batch)
   const targetBucket = skillBucketForPlayers(batch, allowAdjacentSkillMixing)
   return batch.every((player) =>
-    playerMatchesGroupSkill(player, targetRank, targetBucket, allowAdjacentSkillMixing)
+    playerMatchesGroupSkill(
+      player,
+      targetRank,
+      targetBucket,
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
+    )
   )
 }
 
@@ -187,6 +214,7 @@ function buildGroupForAnchor(
   queue,
   assigned,
   groupSize,
+  groupedBySkillLevel,
   allowAdjacentSkillMixing,
   eligibleById,
   allPlayersById,
@@ -222,8 +250,10 @@ function buildGroupForAnchor(
     }
   }
 
-  const targetRank = collectiveSkillRank(group)
-  const targetBucket = skillBucketForPlayers(group, allowAdjacentSkillMixing)
+  const targetRank = groupedBySkillLevel ? collectiveSkillRank(group) : null
+  const targetBucket = groupedBySkillLevel
+    ? skillBucketForPlayers(group, allowAdjacentSkillMixing)
+    : null
 
   const tryAddUnits = (predicate) => {
     for (const player of queue) {
@@ -253,16 +283,32 @@ function buildGroupForAnchor(
     }
   }
 
+  if (!groupedBySkillLevel) {
+    tryAddUnits(() => true)
+    return group
+  }
+
   // Same skill level first, then same two-bucket group (Beginner+Novice or
   // Intermediate+Advanced). Never mix across buckets (e.g. Novice+Advanced).
   tryAddUnits((unitPlayers) =>
-    unitMatchesGroupSkill(unitPlayers, targetRank, targetBucket, allowAdjacentSkillMixing) &&
-    collectiveSkillRank(unitPlayers) === targetRank
+    unitMatchesGroupSkill(
+      unitPlayers,
+      targetRank,
+      targetBucket,
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
+    ) && collectiveSkillRank(unitPlayers) === targetRank
   )
 
   if (allowAdjacentSkillMixing && group.length < groupSize) {
     tryAddUnits((unitPlayers) =>
-      unitMatchesGroupSkill(unitPlayers, targetRank, targetBucket, true) &&
+      unitMatchesGroupSkill(
+        unitPlayers,
+        targetRank,
+        targetBucket,
+        true,
+        groupedBySkillLevel
+      ) &&
       collectiveSkillRank(unitPlayers) !== targetRank
     )
   }
@@ -292,7 +338,12 @@ function addCompleteGroupToState(state, group) {
 // groups. Safe to call multiple times with different pools; already-assigned
 // players are skipped so a later pool tops up what the previous pass left short.
 function runGroupingPhases(eligible, state, options = {}) {
-  const { allowAdjacentSkillMixing = false, matchHistory = [], allPlayersById } = options
+  const {
+    groupedBySkillLevel = true,
+    allowAdjacentSkillMixing = false,
+    matchHistory = [],
+    allPlayersById,
+  } = options
   const { groupSize, maxSlots, assigned, queue } = state
   const eligibleById = new Map(eligible.map((player) => [player.id, player]))
 
@@ -307,6 +358,7 @@ function runGroupingPhases(eligible, state, options = {}) {
       eligible,
       tentativeAssigned,
       groupSize,
+      groupedBySkillLevel,
       allowAdjacentSkillMixing,
       eligibleById,
       allPlayersById,
@@ -317,26 +369,84 @@ function runGroupingPhases(eligible, state, options = {}) {
   }
 
   const veteranEligible = eligible.filter(hasPlayedAtLeastOneGame)
-  for (const anchor of veteranEligible) {
-    if (queue.length >= maxSlots) break
-    if (assigned.has(anchor.id)) continue
+  const winnerAnchors = veteranEligible.filter(
+    (player) => getPlayerLastResult(player, matchHistory) === 'win'
+  )
+  const loserAnchors = veteranEligible.filter(
+    (player) => getPlayerLastResult(player, matchHistory) === 'loss'
+  )
 
-    const requiredStatus = getPlayerLastResult(anchor, matchHistory)
-    if (!requiredStatus) continue
+  const tryVeteranAnchors = (anchors, requiredStatusResolver) => {
+    for (const anchor of anchors) {
+      if (queue.length >= maxSlots) break
+      if (assigned.has(anchor.id)) continue
+      const requiredStatus = requiredStatusResolver(anchor)
+      if (!requiredStatus) continue
+      const tentativeAssigned = new Set(assigned)
+      const group = buildGroupForAnchor(
+        anchor,
+        veteranEligible,
+        tentativeAssigned,
+        groupSize,
+        groupedBySkillLevel,
+        allowAdjacentSkillMixing,
+        eligibleById,
+        allPlayersById,
+        { requiredStatus, matchHistory }
+      )
+      addCompleteGroupToState(state, group)
+    }
+  }
 
+  if (groupedBySkillLevel) {
+    tryVeteranAnchors(veteranEligible, (anchor) =>
+      getPlayerLastResult(anchor, matchHistory)
+    )
+    return
+  }
+
+  // In off-mode, keep winners and losers in separate groups and alternate
+  // winner court first, then loser court when both are available.
+  const winnerQueue = [...winnerAnchors]
+  const loserQueue = [...loserAnchors]
+  const skippedByStatus = { win: new Set(), loss: new Set() }
+  let nextStatus = 'win'
+  while (queue.length < maxSlots) {
+    const source = nextStatus === 'win' ? winnerQueue : loserQueue
+    const alternate = nextStatus === 'win' ? loserQueue : winnerQueue
+    const requiredStatus = nextStatus
+    const anchor = source.find(
+      (player) =>
+        !assigned.has(player.id) && !skippedByStatus[requiredStatus].has(player.id)
+    )
+    if (!anchor) {
+      const fallbackStatus = requiredStatus === 'win' ? 'loss' : 'win'
+      const fallbackAnchor = alternate.find(
+        (player) =>
+          !assigned.has(player.id) && !skippedByStatus[fallbackStatus].has(player.id)
+      )
+      if (!fallbackAnchor) break
+      nextStatus = fallbackStatus
+      continue
+    }
     const tentativeAssigned = new Set(assigned)
     const group = buildGroupForAnchor(
       anchor,
       veteranEligible,
       tentativeAssigned,
       groupSize,
+      groupedBySkillLevel,
       allowAdjacentSkillMixing,
       eligibleById,
       allPlayersById,
       { requiredStatus, matchHistory }
     )
-
-    addCompleteGroupToState(state, group)
+    const added = addCompleteGroupToState(state, group)
+    if (added) {
+      nextStatus = requiredStatus === 'win' ? 'loss' : 'win'
+    } else {
+      skippedByStatus[requiredStatus].add(anchor.id)
+    }
   }
 }
 
@@ -344,8 +454,12 @@ function runGroupingPhases(eligible, state, options = {}) {
 // re-runs against the combined sitting-out + cooldown pool so a complete group
 // can form when sitting-out alone is short.
 function appendCooldownTopUp(state, cooldown, sittingOut, options = {}) {
-  const { allPlayersById, allowAdjacentSkillMixing = false, matchHistory = [] } =
-    options
+  const {
+    allPlayersById,
+    groupedBySkillLevel = true,
+    allowAdjacentSkillMixing = false,
+    matchHistory = [],
+  } = options
   const { groupSize, maxSlots, assigned, queue, groups } = state
   if (queue.length >= maxSlots || cooldown.length === 0) return
 
@@ -361,6 +475,7 @@ function appendCooldownTopUp(state, cooldown, sittingOut, options = {}) {
   const cooldownState = createUpNextState(groupSize, maxSlots - queue.length)
   cooldownState.assigned = new Set(assigned)
   runGroupingPhases(combinedEligible, cooldownState, {
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     matchHistory,
     allPlayersById,
@@ -385,6 +500,7 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
   const {
     numberOfCourts = 1,
     gameMode = 'doubles',
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     courtMatchups = [],
     matchHistory = [],
@@ -393,7 +509,12 @@ export function buildLadderRunUpNextPreview(players, options = {}) {
   const groupSize = groupSizeForMode(gameMode)
   const maxSlots = Math.max(numberOfCourts, 1) * groupSize
   const allPlayersById = new Map((players ?? []).map((player) => [player.id, player]))
-  const phaseOptions = { allowAdjacentSkillMixing, matchHistory, allPlayersById }
+  const phaseOptions = {
+    groupedBySkillLevel,
+    allowAdjacentSkillMixing,
+    matchHistory,
+    allPlayersById,
+  }
 
   const sittingOutRaw = buildSittingOutPool(players, courtMatchups, matchHistory)
   const cooldownRaw = buildCooldownPool(players, courtMatchups, matchHistory)
@@ -446,6 +567,7 @@ function bucketCanFillCourt(bucketPlayers, groupSize, matchHistory) {
 export function explainLadderRunUpNextEmpty(players, options = {}) {
   const {
     gameMode = 'doubles',
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     courtMatchups = [],
     matchHistory = [],
@@ -469,6 +591,24 @@ export function explainLadderRunUpNextEmpty(players, options = {}) {
       return `Only ${eligible.length} player${eligible.length === 1 ? '' : 's'} on cooldown. Need ${groupSize} to fill a ${courtLabel}.`
     }
     return `Only ${eligible.length} player${eligible.length === 1 ? '' : 's'} waiting. Need ${groupSize} to fill a ${courtLabel}.`
+  }
+
+  if (!groupedBySkillLevel) {
+    const winners = eligible.filter(
+      (player) => getPlayerLastResult(player, matchHistory) === 'win'
+    ).length
+    const losers = eligible.filter(
+      (player) => getPlayerLastResult(player, matchHistory) === 'loss'
+    ).length
+    if (
+      winners > 0 &&
+      losers > 0 &&
+      winners < groupSize &&
+      losers < groupSize
+    ) {
+      return `Waiting players are split between recent winners (${winners}) and losers (${losers}). Need ${groupSize} on the same side to form a court.`
+    }
+    return `No complete group of ${groupSize} could be formed from the current waiting players.`
   }
 
   const bucketOpts = { allowAdjacent: allowAdjacentSkillMixing }
@@ -550,11 +690,15 @@ function assignmentCheckInOrderKey(assignment) {
   return flattened[0] * 1000000 + flattened[1] * 10000 + flattened[2] * 100 + flattened[3]
 }
 
-function buildAssignmentMetrics(assignment, allowAdjacentSkillMixing) {
+function buildAssignmentMetrics(
+  assignment,
+  allowAdjacentSkillMixing,
+  groupedBySkillLevel = true
+) {
   const mixedScore =
     (isMixedGender(assignment.teamA[0], assignment.teamA[1]) ? 1 : 0) +
     (isMixedGender(assignment.teamB[0], assignment.teamB[1]) ? 1 : 0)
-  const adjacentPairScore = allowAdjacentSkillMixing
+  const adjacentPairScore = groupedBySkillLevel && allowAdjacentSkillMixing
     ? (isPreferredAdjacentBucketPair(assignment.teamA[0], assignment.teamA[1]) ? 1 : 0) +
       (isPreferredAdjacentBucketPair(assignment.teamB[0], assignment.teamB[1]) ? 1 : 0)
     : 0
@@ -659,13 +803,22 @@ function isFullyFreshAssignment(assignment, lockedPairKeys) {
 
 function scoreDoublesBatch(batch, options = {}) {
   const {
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     preferHistory = false,
     rosterById = new Map((batch ?? []).map((player) => [player.id, player])),
   } = options
   if (!Array.isArray(batch) || batch.length < PLAYERS_PER_DOUBLES_COURT) return null
   if (!isBatchMutualLockConsistent(batch, rosterById)) return null
-  if (!isBatchSkillCompatible(batch, allowAdjacentSkillMixing)) return null
+  if (
+    !isBatchSkillCompatible(
+      batch,
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
+    )
+  ) {
+    return null
+  }
 
   const lockedPairs = buildMutualLockedPairs(batch, rosterById)
   const lockedPairKeys = new Set(
@@ -675,13 +828,14 @@ function scoreDoublesBatch(batch, options = {}) {
     batch.slice(0, PLAYERS_PER_DOUBLES_COURT)
   )
     .filter((assignment) => keepsLockedPairsTogether(assignment.teamA, assignment.teamB, lockedPairs))
-    .filter((assignment) =>
-      canPlayerGroupsOpponents(
+    .filter((assignment) => {
+      if (!groupedBySkillLevel) return true
+      return canPlayerGroupsOpponents(
         assignment.teamA,
         assignment.teamB,
         skillMixingOptions(allowAdjacentSkillMixing)
       )
-    )
+    })
 
   if (baseAssignments.length === 0) return null
 
@@ -702,7 +856,11 @@ function scoreDoublesBatch(batch, options = {}) {
   let bestMetrics = null
 
   assignments.forEach((assignment) => {
-    const metrics = buildAssignmentMetrics(assignment, allowAdjacentSkillMixing)
+    const metrics = buildAssignmentMetrics(
+      assignment,
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
+    )
     if (!bestAssignment) {
       bestAssignment = assignment
       bestMetrics = metrics
@@ -727,7 +885,11 @@ function scoreDoublesBatch(batch, options = {}) {
     )
 
     freshMixedAssignments.forEach((assignment) => {
-      const metrics = buildAssignmentMetrics(assignment, allowAdjacentSkillMixing)
+      const metrics = buildAssignmentMetrics(
+        assignment,
+        allowAdjacentSkillMixing,
+        groupedBySkillLevel
+      )
       if (compareAssignmentMetrics(metrics, bestMetrics, preferHistory) > 0) {
         bestAssignment = assignment
         bestMetrics = metrics
@@ -744,11 +906,17 @@ function scoreDoublesBatch(batch, options = {}) {
 
 export function assignDoublesCourtFromBatch(batch, options = {}) {
   const {
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     preferHistory = false,
     rosterById = new Map((batch ?? []).map((player) => [player.id, player])),
   } = options
-  const scored = scoreDoublesBatch(batch, { allowAdjacentSkillMixing, preferHistory, rosterById })
+  const scored = scoreDoublesBatch(batch, {
+    groupedBySkillLevel,
+    allowAdjacentSkillMixing,
+    preferHistory,
+    rosterById,
+  })
   return scored?.assignment ?? null
 }
 
@@ -766,6 +934,7 @@ function ladderRunCourtFromAssignment(assignment, options = {}) {
 function optimizeVeteranDoublesBatch(
   baselineBatch,
   queue,
+  groupedBySkillLevel,
   allowAdjacentSkillMixing,
   matchHistory,
   rosterById = new Map([...baselineBatch, ...queue].map((player) => [player.id, player]))
@@ -774,6 +943,7 @@ function optimizeVeteranDoublesBatch(
   if (!baselineStatus) return baselineBatch
 
   const baselineScored = scoreDoublesBatch(baselineBatch, {
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     preferHistory: true,
     rosterById,
@@ -788,11 +958,13 @@ function optimizeVeteranDoublesBatch(
     if (baselineIds.has(candidate.id)) return false
     if (!hasPlayedAtLeastOneGame(candidate)) return false
     if (getPlayerLastResult(candidate, matchHistory) !== baselineStatus) return false
+    if (!groupedBySkillLevel) return true
     return playerMatchesGroupSkill(
       candidate,
       baselineRank,
       baselineBucket,
-      allowAdjacentSkillMixing
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
     )
   })
 
@@ -810,6 +982,7 @@ function optimizeVeteranDoublesBatch(
       nextBatch[index] = candidate
       if (!isBatchMutualLockConsistent(nextBatch, rosterById)) continue
       const scored = scoreDoublesBatch(nextBatch, {
+        groupedBySkillLevel,
         allowAdjacentSkillMixing,
         preferHistory: true,
         rosterById,
@@ -828,7 +1001,13 @@ function optimizeVeteranDoublesBatch(
   return bestBatch
 }
 
-function optimizeVeteranSinglesBatch(baselineBatch, queue, allowAdjacentSkillMixing, matchHistory) {
+function optimizeVeteranSinglesBatch(
+  baselineBatch,
+  queue,
+  groupedBySkillLevel,
+  allowAdjacentSkillMixing,
+  matchHistory
+) {
   const baselineStatus = getPlayerLastResult(baselineBatch[0], matchHistory)
   if (!baselineStatus) return baselineBatch
 
@@ -838,11 +1017,13 @@ function optimizeVeteranSinglesBatch(baselineBatch, queue, allowAdjacentSkillMix
   const statusAndSkillCandidates = queue.filter((candidate) => {
     if (candidate.id === baselineBatch[0].id) return false
     if (getPlayerLastResult(candidate, matchHistory) !== baselineStatus) return false
+    if (!groupedBySkillLevel) return true
     return playerMatchesGroupSkill(
       candidate,
       baselineRank,
       baselineBucket,
-      allowAdjacentSkillMixing
+      allowAdjacentSkillMixing,
+      groupedBySkillLevel
     )
   })
 
@@ -859,6 +1040,7 @@ function optimizeVeteranSinglesBatch(baselineBatch, queue, allowAdjacentSkillMix
 export function generateLadderRunCourtFromPreview(preview, options = {}) {
   const {
     gameMode = 'doubles',
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     matchHistory = [],
     courtIndex = 0,
@@ -880,6 +1062,7 @@ export function generateLadderRunCourtFromPreview(preview, options = {}) {
       ? optimizeVeteranSinglesBatch(
           baselineBatch,
           eligiblePool,
+          groupedBySkillLevel,
           allowAdjacentSkillMixing,
           matchHistory
         )
@@ -896,6 +1079,7 @@ export function generateLadderRunCourtFromPreview(preview, options = {}) {
     ? optimizeVeteranDoublesBatch(
         baselineBatch,
         eligiblePool,
+        groupedBySkillLevel,
         allowAdjacentSkillMixing,
         matchHistory,
         rosterById
@@ -903,6 +1087,7 @@ export function generateLadderRunCourtFromPreview(preview, options = {}) {
     : baselineBatch
 
   const scored = scoreDoublesBatch(chosenBatch, {
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     preferHistory: isVeteranBatch(chosenBatch),
     rosterById,
@@ -918,6 +1103,7 @@ export function generateLadderRunCourt(players, options = {}) {
   const {
     numberOfCourts = 1,
     gameMode = 'doubles',
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     courtMatchups = [],
     matchHistory = [],
@@ -927,6 +1113,7 @@ export function generateLadderRunCourt(players, options = {}) {
   const preview = buildLadderRunUpNextPreview(players, {
     numberOfCourts,
     gameMode,
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     courtMatchups,
     matchHistory,
@@ -935,6 +1122,7 @@ export function generateLadderRunCourt(players, options = {}) {
 
   return generateLadderRunCourtFromPreview(preview, {
     gameMode,
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     matchHistory,
     courtIndex,
@@ -979,6 +1167,7 @@ export function captureLadderRunFreeze(players, options = {}) {
   const {
     numberOfCourts = 1,
     gameMode = 'doubles',
+    groupedBySkillLevel = true,
     allowAdjacentSkillMixing = false,
     courtMatchups = [],
     matchHistory = [],
@@ -987,6 +1176,7 @@ export function captureLadderRunFreeze(players, options = {}) {
   const preview = buildLadderRunUpNextPreview(players, {
     numberOfCourts,
     gameMode,
+    groupedBySkillLevel,
     allowAdjacentSkillMixing,
     courtMatchups,
     matchHistory,
@@ -995,6 +1185,7 @@ export function captureLadderRunFreeze(players, options = {}) {
   const onDeckCourt = courtToTeamIds(
     generateLadderRunCourtFromPreview(preview, {
       gameMode,
+      groupedBySkillLevel,
       allowAdjacentSkillMixing,
       matchHistory,
       courtIndex: 0,
@@ -1078,6 +1269,7 @@ export function materializeFrozenLadderRunCourt(snapshot, players, options = {})
   }
 
   const scored = scoreDoublesBatch(topPlayers, {
+    groupedBySkillLevel: options.groupedBySkillLevel ?? true,
     allowAdjacentSkillMixing: options.allowAdjacentSkillMixing ?? false,
     preferHistory: isVeteranBatch(topPlayers),
     rosterById,
@@ -1138,7 +1330,7 @@ export function ladderRunOnDeckSize(gameMode = 'doubles') {
 }
 
 export function applyLadderRunMatchResult(players, result, options = {}) {
-  const { skillAdjustment = 1 } = options
+  const { skillAdjustment = 1, groupedBySkillLevel = true } = options
   const adjustmentThreshold = Math.max(1, Number(skillAdjustment) || 1)
   const { teamAIds = [], teamBIds = [], winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
@@ -1159,7 +1351,7 @@ export function applyLadderRunMatchResult(players, result, options = {}) {
       const previousLossStreak = Number(updated.currentLossStreak) || 0
 
       const nextWinStreak = previousWinStreak + 1
-      if (nextWinStreak >= adjustmentThreshold) {
+      if (groupedBySkillLevel && nextWinStreak >= adjustmentThreshold) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
         updated.currentWinStreak = 0
       } else {
@@ -1189,7 +1381,7 @@ export function applyLadderRunMatchResult(players, result, options = {}) {
       const previousLossStreak = Number(updated.currentLossStreak) || 0
 
       const nextLossStreak = previousLossStreak + 1
-      if (nextLossStreak >= adjustmentThreshold) {
+      if (groupedBySkillLevel && nextLossStreak >= adjustmentThreshold) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
         updated.currentLossStreak = 0
       } else {
@@ -1247,7 +1439,8 @@ export function applyLadderRunMatchResult(players, result, options = {}) {
   }
 }
 
-export function revertLadderRunMatchResult(players, result) {
+export function revertLadderRunMatchResult(players, result, options = {}) {
+  void options
   const { teamAIds = [], teamBIds = [], winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
   const loserIds = new Set(winningTeam === 'A' ? teamBIds : teamAIds)
