@@ -202,6 +202,45 @@ describe('applyLadderRunMatchResult', () => {
     expect(byId.get('d').skillLevel).toBe('Intermediate')
     expect(result.historyEntry.skillChanges).toEqual({})
   })
+
+  it('does not upgrade or downgrade skill when skillAdjustment is off', () => {
+    const players = [
+      makePlayer('a', { skillLevel: 'Novice' }),
+      makePlayer('b', { skillLevel: 'Novice' }),
+      makePlayer('c', { skillLevel: 'Intermediate' }),
+      makePlayer('d', { skillLevel: 'Intermediate' }),
+    ]
+
+    const first = applyLadderRunMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 0, groupedBySkillLevel: true }
+    )
+    const second = applyLadderRunMatchResult(
+      first.players,
+      {
+        courtIndex: 0,
+        teamAIds: ['a', 'b'],
+        teamBIds: ['c', 'd'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 0, groupedBySkillLevel: true }
+    )
+    const byId = new Map(second.players.map((player) => [player.id, player]))
+
+    expect(byId.get('a').skillLevel).toBe('Novice')
+    expect(byId.get('b').skillLevel).toBe('Novice')
+    expect(byId.get('c').skillLevel).toBe('Intermediate')
+    expect(byId.get('d').skillLevel).toBe('Intermediate')
+    expect(byId.get('a').currentWinStreak).toBe(2)
+    expect(byId.get('c').currentLossStreak).toBe(2)
+    expect(second.historyEntry.skillChanges).toEqual({})
+  })
 })
 
 describe('buildLadderRunUpNextPreview', () => {

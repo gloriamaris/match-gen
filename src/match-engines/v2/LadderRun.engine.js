@@ -1331,6 +1331,7 @@ export function ladderRunOnDeckSize(gameMode = 'doubles') {
 
 export function applyLadderRunMatchResult(players, result, options = {}) {
   const { skillAdjustment = 1, groupedBySkillLevel = true } = options
+  const skillAdjustmentEnabled = Number(skillAdjustment) > 0
   const adjustmentThreshold = Math.max(1, Number(skillAdjustment) || 1)
   const { teamAIds = [], teamBIds = [], winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
@@ -1351,7 +1352,7 @@ export function applyLadderRunMatchResult(players, result, options = {}) {
       const previousLossStreak = Number(updated.currentLossStreak) || 0
 
       const nextWinStreak = previousWinStreak + 1
-      if (groupedBySkillLevel && nextWinStreak >= adjustmentThreshold) {
+      if (groupedBySkillLevel && skillAdjustmentEnabled && nextWinStreak >= adjustmentThreshold) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
         updated.currentWinStreak = 0
       } else {
@@ -1381,7 +1382,7 @@ export function applyLadderRunMatchResult(players, result, options = {}) {
       const previousLossStreak = Number(updated.currentLossStreak) || 0
 
       const nextLossStreak = previousLossStreak + 1
-      if (groupedBySkillLevel && nextLossStreak >= adjustmentThreshold) {
+      if (groupedBySkillLevel && skillAdjustmentEnabled && nextLossStreak >= adjustmentThreshold) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
         updated.currentLossStreak = 0
       } else {

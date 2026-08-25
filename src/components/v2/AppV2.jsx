@@ -1744,7 +1744,7 @@ export default function AppV2() {
                 (gameType === V2_GAME_TYPES.LADDER_RUN && groupedBySkillLevel) ? (
                   <>
                     <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      Skill Adjustment: {skillAdjustment}
+                      Skill Adjustment: {skillAdjustment === 0 ? 'Off' : skillAdjustment}
                     </label>
                     <label className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Adjacent Skill Mixing: {allowAdjacentSkillMixing ? 'On' : 'Off'}

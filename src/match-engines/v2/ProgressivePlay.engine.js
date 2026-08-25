@@ -1255,6 +1255,7 @@ const generateStrictSkillCourt = (players, options = {}) => {
 
 const applyMatchResult = (players, result, options = {}) => {
   const { skillAdjustment = 1 } = options
+  const skillAdjustmentEnabled = Number(skillAdjustment) > 0
   const adj = Math.max(1, Number(skillAdjustment) || 1)
   const { courtIndex, teamAIds, teamBIds, winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
@@ -1271,12 +1272,12 @@ const applyMatchResult = (players, result, options = {}) => {
 
     if (isWinner) {
       updated.wins = (Number(updated.wins) || 0) + 1
-      if (updated.wins % adj === 0) {
+      if (skillAdjustmentEnabled && updated.wins % adj === 0) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
       }
     } else {
       updated.losses = (Number(updated.losses) || 0) + 1
-      if (updated.losses % adj === 0) {
+      if (skillAdjustmentEnabled && updated.losses % adj === 0) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
       }
     }
@@ -1328,6 +1329,7 @@ const applyMatchResult = (players, result, options = {}) => {
 
 const revertMatchResult = (players, result, options = {}) => {
   const { skillAdjustment = 1 } = options
+  const skillAdjustmentEnabled = Number(skillAdjustment) > 0
   const adj = Math.max(1, Number(skillAdjustment) || 1)
   const { teamAIds, teamBIds, winningTeam } = result
   const winnerIds = new Set(winningTeam === 'A' ? teamAIds : teamBIds)
@@ -1342,13 +1344,13 @@ const revertMatchResult = (players, result, options = {}) => {
 
     if (isWinner) {
       const oldWins = Number(updated.wins) || 0
-      if (oldWins > 0 && oldWins % adj === 0) {
+      if (skillAdjustmentEnabled && oldWins > 0 && oldWins % adj === 0) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, -1)
       }
       updated.wins = Math.max(0, oldWins - 1)
     } else {
       const oldLosses = Number(updated.losses) || 0
-      if (oldLosses > 0 && oldLosses % adj === 0) {
+      if (skillAdjustmentEnabled && oldLosses > 0 && oldLosses % adj === 0) {
         updated.skillLevel = shiftSkillLevel(updated.skillLevel, 1)
       }
       updated.losses = Math.max(0, oldLosses - 1)

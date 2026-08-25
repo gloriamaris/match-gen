@@ -10,6 +10,9 @@ export default function V2SkillAdjustmentSection({
       <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
         Skill Adjustment
       </h2>
+      <p className="text-xs text-slate-500">
+        When Off, players are not promoted or demoted based on match results.
+      </p>
       <select
         value={skillAdjustment}
         disabled={disabled}
@@ -18,6 +21,7 @@ export default function V2SkillAdjustmentSection({
           disabled ? 'cursor-not-allowed' : ''
         }`}
       >
+        <option value={0}>Off</option>
         {Array.from({ length: 5 }, (_, i) => i + 1).map((count) => (
           <option key={count} value={count}>
             {count}

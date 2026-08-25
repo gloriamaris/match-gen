@@ -185,7 +185,7 @@ export function saveV2WinStreak(winStreak) {
 
 export function loadV2SkillAdjustment() {
   const stored = Number(window.localStorage.getItem(V2_STORAGE_KEYS.skillAdjustment))
-  if (!Number.isInteger(stored) || stored < 1 || stored > 5) {
+  if (!Number.isInteger(stored) || stored < 0 || stored > 5) {
     return DEFAULT_V2_SKILL_ADJUSTMENT
   }
   return stored

@@ -200,6 +200,31 @@ describe('applyMatchResult skill shift', () => {
     expect(updated.find((p) => p.id === 'C').skillLevel).toBe('Beginner')
     expect(updated.find((p) => p.id === 'D').skillLevel).toBe('Beginner')
   })
+
+  it('does not shift skill levels when skillAdjustment is off', () => {
+    const players = [
+      makePlayer('A', { skillLevel: 'Novice' }),
+      makePlayer('B', { skillLevel: 'Novice' }),
+      makePlayer('C', { skillLevel: 'Intermediate' }),
+      makePlayer('D', { skillLevel: 'Intermediate' }),
+    ]
+    const { players: updated, historyEntry } = applyMatchResult(
+      players,
+      {
+        courtIndex: 0,
+        teamAIds: ['A', 'B'],
+        teamBIds: ['C', 'D'],
+        winningTeam: 'A',
+      },
+      { skillAdjustment: 0 }
+    )
+
+    expect(updated.find((p) => p.id === 'A').skillLevel).toBe('Novice')
+    expect(updated.find((p) => p.id === 'B').skillLevel).toBe('Novice')
+    expect(updated.find((p) => p.id === 'C').skillLevel).toBe('Intermediate')
+    expect(updated.find((p) => p.id === 'D').skillLevel).toBe('Intermediate')
+    expect(historyEntry.skillChanges).toEqual({})
+  })
 })
 
 // ---------------------------------------------------------------------------
